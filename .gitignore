@@ -23,6 +23,7 @@ coverage.xml
 htmlcov/
 
 output/
+data/
 
 .idea/
 .vscode/
