@@ -224,7 +224,7 @@ def add_failure_strain(input_dir: str, output_dir: str, strain_failure:float = 0
     with open(output_dir, "w") as output_file:
         output_file.writelines(lines)
 
-def run_ls_prepost(cfile="merge_nodes.cfile"):
+def run_cfile_ls_prepost(cfile_path, timeout = 10):
     """
     Runs LS-PrePost in batch mode to process a command file (cfile) to merge nodes within a threshold.
     
@@ -234,16 +234,18 @@ def run_ls_prepost(cfile="merge_nodes.cfile"):
     """
     # Construct the command
     exe = r"C:\Program Files\ANSYS Inc\v242\ansys\bin\winx64\lsprepost411\lsprepost4.11.exe"
-    cfile = os.path.join(dyna_path, cfile)
     
     cmd = [exe]
-    cmd.append(f"c={cfile}")
+    cmd.append(f"c={cfile_path}")
     cmd.append("-nographics")
+
+    cwd = os.path.dirname(cfile_path)
     
     # Execute the command
     try:
         subprocess.run(cmd, 
-                       timeout=10, 
+                       timeout=timeout,
+                       cwd=cwd, 
                        stderr=subprocess.DEVNULL, 
                        stdout=subprocess.DEVNULL,
                        text=False)

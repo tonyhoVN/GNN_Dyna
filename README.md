@@ -12,12 +12,24 @@ What is here
 - `model/GNN.py`: Prototype GNN model for mesh/contact learning.
 - Notebooks: Experimentation and analysis (`*.ipynb`).
 
-Typical workflow
+Generate data
 ----------------
-1. Generate the input deck:
-   `python ball_plate.py`
-2. Run the solver:
-   `python run_simulation.py --solver "path\to\ls-dyna.exe"`
+1. Generate the input template deck:
+   `python -m ball_plate`
+
+2. Pre-process for data agumented:
+   `python -m `
+
+3. Run the solver simulation to obtain data:
+   `python -m run_simulation --solver "path\to\ls-dyna.exe" --input name_k_file`
+
+4. Post process and save data 
+   `python -m data_process`
+
+5. Load data and train
+   `python -m train`
+
+
 
 Notes
 -----

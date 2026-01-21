@@ -1,0 +1,6 @@
+openc keyword "D:\Projects_code\ball_plate\output\ball_plate.k"
+ident select 1
+genselect target node
+genselect target element
+genselect element add part 2
+ident select 0
