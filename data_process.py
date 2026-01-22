@@ -102,6 +102,7 @@ edges_gnn, edges_attr = build_edges_gnn_from_mesh(mesh)
 
 
 # Get node features
+initial_fc: dpf.FieldsContainer = model.results.initial_coordinates.on_all_time_freqs.eval()  # mm unit
 coordinates_fc: dpf.FieldsContainer = model.results.coordinates.on_all_time_freqs.eval()  # mm unit
 acceleration_fc: dpf.FieldsContainer = model.results.acceleration.on_all_time_freqs.eval()  # mm/ms^2 unit
 velocity_fc: dpf.FieldsContainer = model.results.velocity.on_all_time_freqs.eval()  # mm/ms unit
@@ -114,7 +115,7 @@ time = np.array(model.metadata.time_freq_support.time_frequencies.data)  # ms un
 # delta_t = time[1:] - time[:-1]
 
 # Add distance between nodes as edge attributes (using initial coordinates)
-coords0 = np.asarray(coordinates_fc[0].data)
+coords0 = np.asarray(initial_fc[0].data)
 edge_distance = np.linalg.norm(
     coords0[edges_gnn[:, 0]] - coords0[edges_gnn[:, 1]],
     axis=1,
@@ -148,13 +149,13 @@ for t in range(num_series - 1, num_steps - 1):
     # Predict residual
     x_t = node_feat_series[:, :, t]
     x_t_1 = node_feat_series[:, :, t + 1]
-    y_residual = x_t_1 - x_t
+    y_residual = x_t_1[:, 3:] - x_t[:, 3:]  # acc, vel, disp residual
 
     # Delta time
     delta_t = time[t + 1] - time[t]
     delta_T.append(delta_t)
     y_change = y_residual / delta_t
-    predict_features.append(y_change)
+    predict_features.append(y_change) # (N, 9)
 
     # Store total energies
     total_kinetic_energy.append(kinetic_energy[0].data[t])
@@ -179,7 +180,8 @@ shells = {eid: n for eid, n in element_to_nodes_zero.items() if len(n) == 4}
 np.savez_compressed(
     data_path,
     X_list=np.array(all_features),  # (num_samples, N, 12, num_series)
-    Y_list=np.array(predict_features),  # (num_samples, N, 12)
+    Y_list=np.array(predict_features),  # (num_samples, N, 9)
+    initial_coords=np.array(coords0),  # (N, 3)
     node_mass=node_mass_data_gnn,  # (N,)
     Delta_t=np.array(delta_T),
     element_id_solids=np.array(list(solids.keys())),  # (num_elements,)

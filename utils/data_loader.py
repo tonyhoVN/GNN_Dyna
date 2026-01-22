@@ -14,6 +14,7 @@ class GraphData:
     """
     x: torch.Tensor                 # Node kinetics features (N, F*T)
     y: torch.Tensor                 # Labels / targets (N, F)
+    x_initial: torch.Tensor         # Initial node coordinates (N, 3)
     node_mass: torch.Tensor         # Node mass (N, )
     edge_index: torch.Tensor        # Edge list (2, E)
     edge_attr: Optional[torch.Tensor] = None  # Edge features (E, D)
@@ -47,6 +48,7 @@ class GraphData:
         return GraphData(
             x=self.x.to(device),
             y=self.y.to(device),
+            x_initial=self.x_initial.to(device),
             node_mass=self.node_mass.to(device),
             edge_index=self.edge_index.to(device),
             edge_attr=self.edge_attr.to(device) if self.edge_attr is not None else None,
@@ -71,6 +73,7 @@ class FEMDataset(Dataset):
         data = np.load(data_path, allow_pickle=True)
         self.X_list = data['X_list'] # list[(N, F, T)] size = time_steps
         self.Y_list = data['Y_list'] # list[(N, F,)] size = time_steps
+        self.X_initial = torch.as_tensor(data['initial_coords'], dtype=torch.float)  # (N, 3)
         self.Delta_t = data['Delta_t'] # N
         edge_index = torch.as_tensor(data['edge_index'], dtype=torch.long)
         if edge_index.ndim == 2 and edge_index.shape[0] != 2 and edge_index.shape[1] == 2:
@@ -134,6 +137,7 @@ class FEMDataset(Dataset):
         return GraphData(
             x=current_state,
             y=predict_feature,
+            x_initial=self.X_initial,
             node_mass=self.node_mass,
             edge_index=self.edge_index,
             edge_attr=self.edge_attr,
@@ -173,7 +177,7 @@ def load_data_example():
     i = 1
     for batch in loader:
         for g in batch:
-            print(g.x.shape, g.y.shape)
+            print(g.x.shape, g.y.shape, g.x_initial.shape)
             print(f'node mass shape: {g.node_mass.shape}')
             y_new = torch.cat([g.y, g.node_mass.unsqueeze(-1)], dim=-1)
             print(f'new y shape with node mass: {y_new.shape}')
@@ -181,7 +185,7 @@ def load_data_example():
             print(f'y on GPU shape: {y_gpu.shape}')
             print(f'y on GPU device: {y_gpu[0, 0].device}')
             print(g.edge_attr.shape)
-            
+            print(g.edge_index.numel())
         break
 if __name__ == "__main__":
     load_data_example()

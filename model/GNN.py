@@ -6,6 +6,7 @@ from sklearn.neighbors import KDTree
 from torch_geometric.nn import global_add_pool
 from torch_geometric.utils import add_self_loops, degree
 from utils.data_loader import GraphData
+import numpy as np
 
 class GCNConv(MessagePassing):
     def __init__(self, in_channels, out_channels):
@@ -78,7 +79,7 @@ def build_radius_edges(coords, exclude_edges, radius=0.05):
     coords: (N,3) tensor (either CPU or CUDA)
     exclude_edges: (2,E) tensor on GPU
     radius: float, radius threshold
-    returns: edge_index on CPU (2,E)
+    returns: edge_index (2,E) and edge_attr (E,1) distance on CPU
     """
     coords_cpu = coords.detach().cpu().numpy()
     exclude_edges_cpu = exclude_edges.detach().cpu().numpy()
@@ -94,18 +95,21 @@ def build_radius_edges(coords, exclude_edges, radius=0.05):
     # Query neighbors
     neighbors = tree.query_radius(coords_cpu, r=radius)
 
-    src, dst = [], []
+    src, dst, dist = [], [], []
     for i, neigh in enumerate(neighbors):
         for j in neigh:
             if i != j and (i, j) not in exclude_set:
                 src.append(i)
                 dst.append(j)
+                dist.append(np.linalg.norm(coords_cpu[i] - coords_cpu[j]))
 
     if len(src) == 0:
         # no contact edges
-        return torch.empty((2,0), dtype=torch.long)
+        return torch.empty((2, 0), dtype=torch.long), torch.empty((0, 1), dtype=torch.float)
 
-    return torch.tensor([src, dst], dtype=torch.long)
+    edge_index = torch.tensor([src, dst], dtype=torch.long)
+    edge_attr = torch.tensor(dist, dtype=torch.float).unsqueeze(1)
+    return edge_index, edge_attr
 
 # =============================================
 # 3) Merge FEM edges + radius edges
@@ -130,19 +134,19 @@ class GraphNetBlock(MessagePassing):
         super().__init__(aggr='add')
 
         # egde update net: eij' = f1(xi, xj, eij)
-        self.edge_net = MLP_layer_norm([edge_feat_dim + 2*node_feat_dim, 
+        self.edge_net = MLP([edge_feat_dim + 2*node_feat_dim, 
                              hidden_dim, 
                              hidden_dim])
 
         # redidual node update net: xi' = xi + f2(xi, sum(eij')) 
-        self.node_net = MLP_layer_norm([hidden_dim + node_feat_dim, 
+        self.node_net = MLP([hidden_dim + node_feat_dim, 
                              hidden_dim,
                              hidden_dim])
 
     def forward(self, x, edge_index, edge_feat):
         # ---- SAFE NO-EDGE CASE ----
         if edge_index.numel() == 0:
-            return x    # No neighbors → no message passing
+            return x, edge_feat    # No neighbors → no message passing
         
         # Redidual node update
         re_node_feat = self.propagate(edge_index, x=x, edge_attr=edge_feat)
@@ -179,7 +183,7 @@ class TemporalEncoder(nn.Module):
             batch_first=True
         )
 
-        self.fc = MLP_layer_norm([hidden_dim + 1, hidden_dim, hidden_dim])  # +1 for mass feature
+        self.fc = MLP([hidden_dim + 1, hidden_dim, hidden_dim])  # +1 for mass feature
 
     def forward(self, x, mass):
         """
@@ -199,21 +203,23 @@ class TemporalEncoder(nn.Module):
 
  
 class MeshGraphNet(nn.Module):
-    def __init__(self, node_dim, edge_dim , latent_dim=128, n_temp_layers=3, n_gnn_layers=4, out_dim=12):
+    def __init__(self, node_dim, edge_dim, out_dim, latent_dim=128, n_temp_layers=3, n_gnn_layers=4):
         super().__init__()
 
         # LSTM encoder for node temporal features
-        self.node_encoder = TemporalEncoder(
+        self.node_topo_encoder = TemporalEncoder(
             in_dim = node_dim,
             hidden_dim = latent_dim,
             n_layers = n_temp_layers
         )
 
+        self.node_radius_encoder = MLP([6, latent_dim, latent_dim])
+
         # Edge encoder
-        self.edge_encoder = MLP_layer_norm([edge_dim, latent_dim, latent_dim])
+        self.edge_encoder = MLP([edge_dim, latent_dim, latent_dim])
 
         # Message-passing layers
-        self.n_temp_layers = n_temp_layers
+        self.n_gnn_layers = n_gnn_layers
         # self.layers_topo = nn.ModuleList([
         #     GraphNetBlock(
         #         edge_feat_dim=edge_dim,
@@ -222,19 +228,19 @@ class MeshGraphNet(nn.Module):
         #     for _ in range(n_gnn_layers)
         # ])
         self.layers_topo = GraphNetBlock(
-                edge_feat_dim=edge_dim,
-                node_feat_dim=node_dim,
+                edge_feat_dim=latent_dim,
+                node_feat_dim=latent_dim,
                 hidden_dim=latent_dim)
 
         self.layers_radius = GraphNetBlock(
-            edge_feat_dim=edge_dim,
-            node_feat_dim=node_dim,
+            edge_feat_dim=1,
+            node_feat_dim=latent_dim,
             hidden_dim=latent_dim)
 
-        self.add_passage = MLP_layer_norm([latent_dim*2, latent_dim])
+        self.add_passage = MLP([latent_dim + latent_dim, latent_dim])
 
         # Decode node features (12)
-        self.node_decoder = MLP_layer_norm([latent_dim, latent_dim, out_dim])
+        self.node_decoder = MLP([latent_dim, latent_dim, out_dim])
 
         # PINN net
         # self.pinn = PhysicsNet(hidden_dim=latent_dim)
@@ -253,20 +259,21 @@ class MeshGraphNet(nn.Module):
         # -----------------------------------
         coords = graph.x[:, :3, -1]  # (N,3)
         topo_edge_index = graph.edge_index  # (2, E)
+        xv = graph.x[:, :6, -1]  # (N,6) position + velocity
 
         # -----------------------------------
         # 2. Node and edge encoder
         # -----------------------------------
-        h0 = self.node_encoder(graph.x, graph.node_mass)    # (N, H)
-        h_topo = h0                 # (N, H)
-        h_radius = h_topo.clone()   # (N, H)
+        h_topo = self.node_topo_encoder(graph.x, graph.node_mass)    # (N, H)
+        h_radius = self.node_radius_encoder(xv)   # (N, H)
         edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
 
         # -----------------------------------
         # 3. Build contact edges (KDTree on CPU)
         # -----------------------------------
-        radius_edges = build_radius_edges(coords, topo_edge_index, radius=2.0)
-        radius_edges = radius_edges.to(device)
+        radius_edge_index, radius_edge_attr = build_radius_edges(coords, topo_edge_index, radius=15.0)
+        radius_edge_index = radius_edge_index.to(device)
+        radius_edge_attr = radius_edge_attr.to(device)
 
         # # -----------------------------------
         # # 4. Combine edges
@@ -283,35 +290,44 @@ class MeshGraphNet(nn.Module):
         # for layer in self.layers_topo:
         #     h_topo = layer(h_topo, topo_edge_index)
 
-        for _ in range(self.n_temp_layers):
-            h_topo = self.layers_topo(h_topo, topo_edge_index)
+        # MP over topo edges
+        for _ in range(self.n_gnn_layers):
+            h_topo, edge_feat = self.layers_topo(h_topo, topo_edge_index, edge_feat)
+        
+        # MP over radius edges
+        # for _ in range(5):
+        h_radius, _ = self.layers_radius(h_radius, radius_edge_index, radius_edge_attr)
 
-        h_radius = self.layers_radius(h_radius, radius_edges)
+        # breakpoint()
 
         # combine both passages
         h = self.add_passage(torch.cat([h_topo, h_radius], dim=1))
+        # h = self.add_passage(h_topo + h_radius)
 
         # -----------------------------------
         # 6. Output prediction
         # -----------------------------------
-        return self.node_decoder(h)
+        delta_pred = self.node_decoder(h)  # (N, out_dim)
+        
+        return delta_pred
     
     def loss(self, pred, target):
         return F.mse_loss(pred, target)
 
 class PhysicsNet(nn.Module):
-    def __init__(self, hidden_dim=128):
+    def __init__(self, hidden_dim=128, mat_emb_dim: int = 16):
         super().__init__()
 
         # Potential energy MLP
         self.encode_node = MLP_layer_norm([3, hidden_dim, hidden_dim])
-        self.encode_element = MLP_layer_norm([hidden_dim + 1, hidden_dim, 1])
+        self.encode_element = MLP_layer_norm([hidden_dim + mat_emb_dim, hidden_dim, 1])
+        self.mat_emb = nn.Embedding(2, mat_emb_dim)
 
     def forward(self, graph: GraphData):
         node_feat = graph.x[:, :, -1]  # (N, F)
-        x = node_feat[:, :3]    # (N, 3) coordinates
+        u = node_feat[:, -3:]    # (N, 3) displacement
         v = node_feat[:, 3:6]  # (N, 3) velocities
-        m = graph.node_mass.to(node_feat.device)    # (N, ) mass
+        m = graph.node_mass    # (N, ) mass
 
         # Kinetic energy
         kinetic_energy = self.global_kinetic_energy(m, v)  # scalar
@@ -320,11 +336,11 @@ class PhysicsNet(nn.Module):
         element_to_nodes = graph.element_to_nodes  # {element_id: [node_ids, ]}
         element_materials = graph.element_materials  # {element_id: material_id}
 
-        internal_energy = self.global_internal_energy(element_to_nodes, element_materials, x)
+        internal_energy = self.global_internal_energy(element_to_nodes, element_materials, u)
         return kinetic_energy, internal_energy
     
     def global_kinetic_energy(self, m, v):
-        K = 0.5 * m * torch.norm(v, dim=1, keepdim=True) ** 2
+        K = 0.5 * m * (v.pow(2).sum(dim=1, keepdim=True))
         return K.sum()
     
     def global_internal_energy(self, element_to_nodes, element_materials, x):
@@ -332,13 +348,16 @@ class PhysicsNet(nn.Module):
 
         node_latent = self.encode_node(x)  # (N, H)
         for element_id, node_ids in element_to_nodes.items():
-            element_coords = node_latent[node_ids].sum(dim=0)  # (,H)
+            element_coords = node_latent[node_ids].sum(dim=0)  # (H,)
             element_material = element_materials[element_id] # scalar
-            element_feat = torch.cat([element_coords, element_material], dim=0)
-            # Compute element-level potential energy
-            element_pe = self.encode_element(element_feat)  # (1,)
 
-            U += element_pe.squeeze()
+            mat_feat = self.mat_emb(element_material)  # (mat_emb_dim,)
+            element_feat = torch.cat([element_coords, mat_feat], dim=0)
+            
+            # Compute element-level potential energy
+            element_ie = self.encode_element(element_feat)  # (1,)
+
+            U += F.softplus(element_ie).squeeze() # softplus to ensure positive energy
 
         return U
 

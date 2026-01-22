@@ -213,18 +213,19 @@ def get_nodes_mass():
     
     return node_mass, missing_elements
 
-def translate_model():
+def translate_model(keyword_path: str = None, output_path: str = None):
     import random
-    root = os.path.dirname(os.path.abspath(__file__))
+    dir_file = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(dir_file)
 
-    keyword_path = os.path.join(root, "output", "ball_plate.k")
-    save_keyword_path = os.path.join(root, "output", "ball_plate_translate.k")
+    keyword_path = keyword_path
+    save_keyword_path = output_path
     cfile_path = os.path.join(root, "cfile", "translate.cfile")
 
     # Random translation (units = model units)
     x = random.uniform(-100, 100)
     y = random.uniform(-100, 100)
-    z = random.uniform(0, 50)
+    z = random.uniform(0, 20)
 
     write_translate_cfile(
         output_path=cfile_path,

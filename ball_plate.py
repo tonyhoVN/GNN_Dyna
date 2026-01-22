@@ -55,6 +55,7 @@ from ansys.dyna.core.pre.dynamech import (
     Velocity,
 )
 from ansys.dyna.core.pre.misc import check_valid_ip
+import random
 
 # sphinx_gallery_thumbnail_path = '_static/pre/explicit/ball_plate.png'
 
@@ -96,7 +97,7 @@ solution.open_files(fns)
 # For the D3plots, set simulation termination time, simulation timestep, and
 # output frequency.
 
-solution.set_termination(termination_time=20)
+solution.set_termination(termination_time=30.0)
 
 ballplate = DynaMech(AnalysisType.NONE)
 solution.add(ballplate)
@@ -194,7 +195,8 @@ ballplate.boundaryconditions.create_spc(NodeSet(spc), rx=False, ry=False, rz=Fal
 # to initialize the velocity components in the desired direction.
 # for i in range(1, 1652):
 #     ballplate.initialconditions.create_velocity_node(i, trans=Velocity(0, 0, -10))
-ballplate.initialconditions.create_velocity(PartSet([2]), 0, Velocity(0,0,-1))
+vel = random.uniform(-1.0, -3.0)
+ballplate.initialconditions.create_velocity(PartSet([2]), 0, Velocity(0,0,vel))
 ###############################################################################
 # Define database outputs
 # ~~~~~~~~~~~~~~~~~~~~~~~
