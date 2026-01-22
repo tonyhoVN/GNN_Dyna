@@ -2,8 +2,9 @@ import os
 from datetime import datetime
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from utils.data_loader import FEMDataset
 from model.GNN import MeshGraphNet
@@ -11,21 +12,34 @@ from model.GNN import MeshGraphNet
 # Load dataset
 root = os.getcwd()
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-data_path = os.path.join(root, "data", "ball_plate_gnn_data.npz")
+data_dir = os.path.join(root, "data")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-dataset = FEMDataset(data_path)
+npz_files = sorted(
+    os.path.join(data_dir, name)
+    for name in os.listdir(data_dir)
+    if name.lower().endswith(".npz")
+)
+if not npz_files:
+    raise FileNotFoundError(f"No .npz files found in {data_dir}")
+
+datasets = [FEMDataset(path) for path in npz_files]
+dataset = ConcatDataset(datasets)
+print(f"Total samples: {len(dataset)}")
+
 loader = DataLoader(dataset, batch_size=5, shuffle=True, collate_fn=lambda batch: batch)
 
 # Initialize model and optimizer
-node_dim = dataset.X_list.shape[2]
-out_dim = dataset.Y_list.shape[2]
-edge_dim = dataset.edge_attr.shape[1] if dataset.edge_attr is not None else 1
+ref_dataset = datasets[0]
+node_dim = ref_dataset.X_list.shape[2]
+out_dim = ref_dataset.Y_list.shape[2]
+edge_dim = ref_dataset.edge_attr.shape[1] if ref_dataset.edge_attr is not None else 1
 model = MeshGraphNet(node_dim=node_dim, edge_dim=edge_dim, out_dim=out_dim).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
+
 # Training loop
-epochs = 1000
+epochs = 100
 save_every = 10
 loss_history = []
 model_dir = os.path.join(root, "model")
@@ -40,7 +54,7 @@ model.train()
 for epoch in range(epochs):
     total_loss = 0.0
     num_graphs = 0
-    for graphs in loader:
+    for graphs in tqdm(loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch"):
         optimizer.zero_grad()
         batch_loss = 0.0
         for graph in graphs:
@@ -54,11 +68,16 @@ for epoch in range(epochs):
         optimizer.step()
         total_loss += batch_loss.item()
 
+    # Compute average loss for the epoch
     avg_loss = total_loss / max(num_graphs, 1)
     loss_history.append(avg_loss)
     print(f"Epoch {epoch+1}/{epochs} - loss: {avg_loss:.6f}")
+
+    # Log loss to file
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"{avg_loss}\n")
+
+    # Save model checkpoint
     if (epoch + 1) % save_every == 0:
         # save_path = os.path.join(model_dir, f"meshgraphnet_{timestamp}_epoch{epoch+1}.pt")
         torch.save(model.state_dict(), model_path)

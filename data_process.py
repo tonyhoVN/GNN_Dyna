@@ -105,7 +105,6 @@ def process_gnn_data(data_folder: str):
 
     ##########
     all_node_features = []   # list of T tensors
-    all_initial_coords = []
     predict_features = []
     delta_T = []
     total_kinetic_energy = []
@@ -189,7 +188,7 @@ def process_gnn_data(data_folder: str):
         total_internal_energy=total_internal_energy,  # (num_samples, 2)
         total_kinetic_energy=total_kinetic_energy,  # (num_samples, 2)
         Delta_t=np.array(delta_T), # (num_samples,)
-        initial_coords=np.array(all_initial_coords),  # (N, 3)
+        initial_coords=coords0,  # (N, 3)
         node_mass=node_mass_data_gnn,  # (N,)
         element_id_solids=np.array(list(solids.keys())),  # (num_elements,)
         element_id_shells=np.array(list(shells.keys())),  # (num_elements,)

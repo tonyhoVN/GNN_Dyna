@@ -1,8 +1,8 @@
 openc command "D:\Projects_code\ball_plate\cfile\element_mass_all.cfile" nodialog
 bgstyle plain
 openc keyword "D:\Projects_code\ball_plate\output\20260122_094315\ball_plate.k"
- Time to read keyword file =  0.020 seconds
- Time to process element data =  0.012 seconds
+ Time to read keyword file =  0.023 seconds
+ Time to process element data =  0.008 seconds
 Finished reading model
 measure select 1
 genselect target element

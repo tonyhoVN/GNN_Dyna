@@ -167,7 +167,7 @@ def simple_test():
 def load_data_example():
     import os
     root = os.getcwd()
-    data_path = os.path.join(root, "data", "ball_plate_gnn_data.npz")
+    data_path = os.path.join(root, "data", "20260122_094004_gnn_data.npz")
     dataset = FEMDataset(data_path)
 
     def collate_graphs(batch):
