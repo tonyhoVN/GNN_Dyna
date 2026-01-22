@@ -12,7 +12,7 @@ What is here
 - `model/GNN.py`: Prototype GNN model for mesh/contact learning.
 - Notebooks: Experimentation and analysis (`*.ipynb`).
 
-Generate data
+Generate data manual
 ----------------
 1. Generate the input template deck:
    `python -m ball_plate`
@@ -23,7 +23,11 @@ Generate data
 3. Run the solver simulation to obtain data:
    `python -m run_simulation --solver "path\to\ls-dyna.exe" --input name_k_file`
 
-4. Post process and save data 
+Generate data automate 
+----------------
+`python create_dataset.py --num_runs 2`
+
+4. Post-process and save dataset for training
    `python -m data_process`
 
 5. Load data and train

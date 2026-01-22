@@ -59,7 +59,7 @@ if __name__ == "__main__":
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = os.path.join(root, "output", f"{timestamp}")
         os.makedirs(run_dir, exist_ok=True)
-        modify_keyword_path = os.path.join(run_dir, "ball_plate_translate.k")
+        modify_keyword_path = os.path.join(run_dir, "ball_plate.k")
         translate_model(keyword_path=keyword_path, output_path=modify_keyword_path)
 
         # run simulation

@@ -71,6 +71,12 @@ def load_mesh(d3plot_path: str):
     return simulation.mesh
 
 def build_element_connectivity(mesh):
+    """
+    Build element to nodes connectivity from mesh with 1-based indexing.
+    
+    :param mesh: Mesh object from DPF
+    :return: Dictionary mapping element IDs to lists of node IDs
+    """
     element_ids = list(mesh.element_ids)
     element_to_nodes = {}
     for element_index, node_ids in enumerate(mesh.element_to_node_ids_connectivity):

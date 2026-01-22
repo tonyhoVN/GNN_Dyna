@@ -3,9 +3,9 @@ openc keyword "D:\Projects_code\ball_plate\output\ball_plate.k"
 genselect target node
 genselect transfer 0
 genselect node add part 2
-translate_model -22.318128001352335 -69.73595214371373 16.79423227229405
+translate_model -82.54345731496895 71.02554932480726 13.018418806953672
 save keywordabsolute 0
 save keywordbylongfmt 0
 save keywordbyi10fmt 0
-save keyword "D:\Projects_code\ball_plate\output\20260122_083440\ball_plate_translate.k"
+save keyword "D:\Projects_code\ball_plate\output\20260122_094315\ball_plate.k"
 exit
