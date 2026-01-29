@@ -7,72 +7,9 @@ from torch_geometric.nn import global_add_pool
 from torch_geometric.utils import add_self_loops, degree
 from utils.data_loader import GraphData
 import numpy as np
-
-class GCNConv(MessagePassing):
-    def __init__(self, in_channels, out_channels):
-        super().__init__(aggr='add')  # "Add" aggregation (Step 5).
-        self.lin = nn.Linear(in_channels, out_channels, bias=False)
-        self.bias = nn.Parameter(torch.empty(out_channels))
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        self.lin.reset_parameters()
-        self.bias.data.zero_()
-
-    def forward(self, x, edge_index):
-        # x has shape [N, in_channels]
-        # edge_index has shape [2, E]
-
-        # Step 1: Add self-loops to the adjacency matrix.
-        edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
-
-        # Step 2: Linearly transform node feature matrix.
-        x = self.lin(x)
-
-        # Step 3: Compute normalization.
-        row, col = edge_index
-        deg = degree(col, x.size(0), dtype=x.dtype)
-        deg_inv_sqrt = deg.pow(-0.5)
-        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
-        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-
-        # Step 4-5: Start propagating messages.
-        out = self.propagate(edge_index, x=x, norm=norm)
-
-        # Step 6: Apply a final bias vector.
-        out = out + self.bias
-
-        return out
-
-    def message(self, x_j, norm):
-        # x_j has shape [E, out_channels]
-
-        # Step 4: Normalize node features.
-        return norm.view(-1, 1) * x_j
-
+from model.message_passing_gnn import *
 # =============================================
-# 1) Simple MLP
-# =============================================
-def MLP_layer_norm(channels):
-    layers = []
-    for i in range(len(channels)-1):
-        layers.append(nn.Linear(channels[i], channels[i+1]))
-        if i < len(channels)-2:
-            layers.append(nn.ReLU())
-    layers.append(nn.LayerNorm(channels[-1]))
-    return nn.Sequential(*layers)
-
-def MLP(channels):
-    layers = []
-    for i in range(len(channels)-1):
-        layers.append(nn.Linear(channels[i], channels[i+1]))
-        if i < len(channels)-2:
-            layers.append(nn.ReLU())
-    return nn.Sequential(*layers)
-
-# =============================================
-# 2) Build radius edges using KDTree (CPU)
+# Build radius edges using KDTree (CPU)
 # =============================================
 def build_radius_edges(coords, exclude_edges, radius=0.05):
     """
@@ -112,7 +49,7 @@ def build_radius_edges(coords, exclude_edges, radius=0.05):
     return edge_index, edge_attr
 
 # =============================================
-# 3) Merge FEM edges + radius edges
+# Merge FEM edges + radius edges
 # =============================================
 def combine_edges(topo_edge_index, radius_edge_index):
     """
@@ -128,49 +65,6 @@ def combine_edges(topo_edge_index, radius_edge_index):
     merged = torch.unique(merged, dim=1)
     return merged
 
-
-class GraphNetBlock(MessagePassing):
-    def __init__(self, edge_feat_dim, node_feat_dim, hidden_dim):
-        super().__init__(aggr='add')
-
-        # egde update net: eij' = f1(xi, xj, eij)
-        self.edge_net = MLP([edge_feat_dim + 2*node_feat_dim, 
-                             hidden_dim, 
-                             hidden_dim])
-
-        # redidual node update net: xi' = xi + f2(xi, sum(eij')) 
-        self.node_net = MLP([hidden_dim + node_feat_dim, 
-                             hidden_dim,
-                             hidden_dim])
-
-    def forward(self, x, edge_index, edge_feat):
-        # ---- SAFE NO-EDGE CASE ----
-        if edge_index.numel() == 0:
-            return x, edge_feat    # No neighbors → no message passing
-        
-        # Redidual node update
-        re_node_feat = self.propagate(edge_index, x=x, edge_attr=edge_feat)
-        
-        # Redidual edge update 
-                # Edge update
-        row, col = edge_index
-        re_edge_features = self.edge_net(torch.cat([x[row], x[col], edge_feat], dim=-1))
-        
-        # Update
-        x = x + re_node_feat
-        edge_feat = edge_feat + re_edge_features
-
-        return x, edge_feat
-
-    def message(self, x_i, x_j, edge_attr):            
-        msg = torch.cat([x_i, x_j, edge_attr], dim=-1)
-        return self.edge_net(msg) 
-
-    def update(self, aggr_out, x):
-        # aggr_out: (N, H)
-        tmp = torch.cat([aggr_out, x], dim=-1) 
-        return self.node_net(tmp)
-    
 
 class TemporalEncoder(nn.Module):
     def __init__(self, in_dim, hidden_dim, n_layers = 3):
@@ -201,6 +95,18 @@ class TemporalEncoder(nn.Module):
 
         return self.fc(h)                     # (N, H)
 
+class NormalEncoder(nn.Module):
+    def __init__(self, in_dim, hidden_dim, n_layers =3):
+        super().__init__()
+
+        self.fc = MLP([in_dim, hidden_dim, hidden_dim])
+
+    def forward(self, x):
+        """
+        x: node info (N, F)
+        output: node embedded features (N, H)
+        """
+        return self.fc(x)                     # (N, H)
  
 class MeshGraphNet(nn.Module):
     def __init__(self, node_dim, edge_dim, out_dim, latent_dim=128, n_temp_layers=3, n_gnn_layers=4):
@@ -314,17 +220,22 @@ class MeshGraphNet(nn.Module):
     def loss(self, pred, target):
         return F.mse_loss(pred, target)
 
+
 class PhysicsNet(nn.Module):
-    def __init__(self, hidden_dim=128, mat_emb_dim: int = 16):
+    """
+    PINN net to predict system energies
+    """
+    def __init__(self, hidden_dim=128, mat_emb_dim: int = 2):
         super().__init__()
 
         # Potential energy MLP
-        self.encode_node = MLP_layer_norm([3, hidden_dim, hidden_dim])
+        self.encode_node = MLP_layer_norm([6, hidden_dim, hidden_dim])
         self.encode_element = MLP_layer_norm([hidden_dim + mat_emb_dim, hidden_dim, 1])
         self.mat_emb = nn.Embedding(2, mat_emb_dim)
 
     def forward(self, graph: GraphData):
         node_feat = graph.x[:, :, -1]  # (N, F)
+        x_0 = graph.x_initial  # (N, 3)
         u = node_feat[:, -3:]    # (N, 3) displacement
         v = node_feat[:, 3:6]  # (N, 3) velocities
         m = graph.node_mass    # (N, ) mass
@@ -335,29 +246,35 @@ class PhysicsNet(nn.Module):
         # Potential energy 
         element_to_nodes = graph.element_to_nodes  # {element_id: [node_ids, ]}
         element_materials = graph.element_materials  # {element_id: material_id}
-
-        internal_energy = self.global_internal_energy(element_to_nodes, element_materials, u)
+        internal_energy = self.global_internal_energy(element_to_nodes, element_materials, u, x_0)  # scalar
         return kinetic_energy, internal_energy
     
     def global_kinetic_energy(self, m, v):
         K = 0.5 * m * (v.pow(2).sum(dim=1, keepdim=True))
         return K.sum()
     
-    def global_internal_energy(self, element_to_nodes, element_materials, x):
-        U = torch.zeros((), device=x.device)
+    def global_internal_energy(self, element_to_nodes, element_materials, u, x_0):
+        U = torch.zeros((), device=u.device)
 
-        node_latent = self.encode_node(x)  # (N, H)
+        # node_latent = self.encode_node(u)  # (N, H)
         for element_id, node_ids in element_to_nodes.items():
-            element_coords = node_latent[node_ids].sum(dim=0)  # (H,)
-            element_material = element_materials[element_id] # scalar
+            u_e = u[node_ids]            # (k, 3)
+            x0_e = x_0[node_ids]         # (k, 3)
 
-            mat_feat = self.mat_emb(element_material)  # (mat_emb_dim,)
+            u_rel = u_e - u_e.mean(dim=0, keepdim=True)
+            x0_rel = x0_e - x0_e.mean(dim=0, keepdim=True)
+
+            features = torch.cat([u_rel, x0_rel], dim=1)     # (k, 6)
+            element_coords = self.encode_node(features).mean(dim=0)  # (H,)
+
+            mat_id = torch.as_tensor(element_materials[element_id],
+                                    device=u.device, dtype=torch.long)
+            mat_feat = self.mat_emb(mat_id-1)                  # (mat_emb_dim,)
+
             element_feat = torch.cat([element_coords, mat_feat], dim=0)
-            
-            # Compute element-level potential energy
-            element_ie = self.encode_element(element_feat)  # (1,)
+            element_ie = self.encode_element(element_feat)   # (1,)
 
-            U += F.softplus(element_ie).squeeze() # softplus to ensure positive energy
+            U = U + F.softplus(element_ie).squeeze()
 
         return U
 

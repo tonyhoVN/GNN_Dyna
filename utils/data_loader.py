@@ -130,10 +130,10 @@ class FEMDataset(Dataset):
         delta_t = torch.as_tensor(self.Delta_t[idx], dtype=torch.float)  # scalar
         total_internal_energy = None
         if self.total_internal_energy is not None:
-            total_internal_energy = torch.as_tensor(self.total_internal_energy[idx], dtype=torch.float)
+            total_internal_energy = torch.as_tensor(self.total_internal_energy[idx], dtype=torch.float) # (2, )
         total_kinetic_energy = None
         if self.total_kinetic_energy is not None:
-            total_kinetic_energy = torch.as_tensor(self.total_kinetic_energy[idx], dtype=torch.float)
+            total_kinetic_energy = torch.as_tensor(self.total_kinetic_energy[idx], dtype=torch.float) # (2, )
         return GraphData(
             x=current_state,
             y=predict_feature,

@@ -28,5 +28,7 @@ data/
 .idea/
 .vscode/
 
+wandb/
+
 .DS_Store
 Thumbs.db
