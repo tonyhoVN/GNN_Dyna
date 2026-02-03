@@ -20,7 +20,7 @@ def MLP(channels):
     for i in range(len(channels)-1):
         layers.append(nn.Linear(channels[i], channels[i+1]))
         if i < len(channels)-2:
-            layers.append(nn.ReLU())
+            layers.append(nn.GELU())
     return nn.Sequential(*layers)
 
 # =============================================
@@ -109,3 +109,31 @@ class GraphNetBlock(MessagePassing):
         # aggr_out: (N, H)
         tmp = torch.cat([aggr_out, x], dim=-1) 
         return self.node_net(tmp)
+    
+class GraphNetSurfaceBlock(MessagePassing):
+    def __init__(self, hidden_dim: int):
+        super().__init__(aggr='add')
+
+        # edge message: m_ij = f([dx, dy, dz, ||d||]) -> (E, H)
+        self.edge_net = MLP([4, hidden_dim, hidden_dim])
+
+        # node update: Δpos_i = g([sum_j m_ij, pos_i]) -> (N, 3)
+        self.node_net = MLP([hidden_dim + 3, hidden_dim, hidden_dim])
+
+    def forward(self, pos, edge_index):
+        # pos: (N, 3), edge_index: (2, E)
+        if edge_index is None or edge_index.numel() == 0:
+            return pos
+        return self.propagate(edge_index, pos=pos)
+
+    def message(self, pos_i, pos_j):
+        dist = pos_i - pos_j                          # (E, 3)
+        r = torch.norm(dist, dim=-1, keepdim=True)    # (E, 1)
+        msg = torch.cat([dist, r], dim=-1)            # (E, 4)
+        return self.edge_net(msg)                     # (E, H)
+
+    def update(self, aggr_out, pos):
+        # aggr_out: (N, H)
+        tmp = torch.cat([aggr_out, pos], dim=-1)      # (N, H+3)
+        node_force_en = self.node_net(tmp)                     # (N, 3)
+        return node_force_en                             # residual position update

@@ -1,5 +1,5 @@
 bgstyle plain
-openc keyword "D:\Projects_code\ball_plate\output\20260122_094315\ball_plate.k"
+openc keyword "D:\Projects_code\ball_plate\output\20260122_094004\ball_plate.k"
 
 measure select 1
 genselect target element

@@ -152,7 +152,6 @@ def process_gnn_data(data_folder: str, geometry_path: str):
     ##########
     all_node_features = []   # list of T tensors
     predict_features = []
-    all_node_pos = [] # Position of all nodes in graph
     delta_T = []
     total_kinetic_energy = []
     total_internal_energy = []
@@ -174,29 +173,33 @@ def process_gnn_data(data_folder: str, geometry_path: str):
     num_steps = len(time)
     node_feat_series = []
     for i in range(num_steps):  # Start from num_series-1 to T-1
+        coor = np.asarray(coordinates_fc[i].data)
         acc = np.asarray(acceleration_fc[i].data)
         vel = np.asarray(velocity_fc[i].data)
         disp = np.asarray(displacement_fc[i].data)
-        node_feat_series.append(np.concatenate([acc, vel, disp], axis=1))  # (N, 9)
-    node_feat_series = np.stack(node_feat_series, axis=2)  # (N, 9, T)
+        node_feat_series.append(np.concatenate([coor, acc, vel, disp], axis=1))  # (N, 12)
+    node_feat_series = np.stack(node_feat_series, axis=2)  # (N, 12, T)
 
     # Step2: Get prediction features and energies
     for t in range(num_series - 1, num_steps - 1):
         # Extract node features for entire node at time t with history
-        node_feat = node_feat_series[:, :, t - num_series + 1: t + 1]  # (N, 9, num_series)
-        # node_feat = node_feat.reshape(node_feat.shape[0], -1)  # (N, 9*num_series)
+        node_feat = node_feat_series[:, :, t - num_series + 1: t + 1]  # (N, 12, num_series)
+        node_feat = node_feat.reshape(node_feat.shape[0], -1)  # (N, 12*num_series)
         all_node_features.append(node_feat)
-
-        # Position of nodes at time t
-        all_node_pos.append(coordinates_fc[t].data)
 
         # Delta time
         delta_t = time[t + 1] - time[t]
         delta_T.append(delta_t)
 
-        # Node feature prediction
+        # # Predict residual
         x_t_1 = node_feat_series[:, :, t + 1]
-        predict_features.append(x_t_1) # (N, 9)
+        # x_t = node_feat_series[:, :, t]
+        # y_residual = x_t_1[:, 3:] - x_t[:, 3:]  # acc, vel, disp residual        
+        # y_change = y_residual / delta_t
+        # predict_features.append(y_change) # (N, 9)
+
+        # Predict next state
+        predict_features.append(x_t_1[:, 3:]) # (N, 9)
 
         # Store total energies include current and next step
         # current step energy used for train Physics net
@@ -208,9 +211,8 @@ def process_gnn_data(data_folder: str, geometry_path: str):
 
     np.savez_compressed(
         save_data_path,
-        X_list=np.array(all_node_features),  # (num_samples, N, 9, num_series)
+        X_list=np.array(all_node_features),  # (num_samples, N, 12, num_series)
         Y_list=np.array(predict_features),  # (num_samples, N, 9)
-        pos_list = np.array(all_node_pos),  # (num_samples, N, 3)
         total_internal_energy=total_internal_energy,  # (num_samples, 2)
         total_kinetic_energy=total_kinetic_energy,  # (num_samples, 2)
         Delta_t=np.array(delta_T), # (num_samples,)

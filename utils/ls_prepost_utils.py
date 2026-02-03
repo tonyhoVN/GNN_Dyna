@@ -82,6 +82,8 @@ def build_element_connectivity(mesh):
     for element_index, node_ids in enumerate(mesh.element_to_node_ids_connectivity):
         element_id = int(element_ids[element_index])
         element_to_nodes[element_id] = [int(nid) for nid in node_ids]
+    # Sort by element index
+    element_to_nodes = dict(sorted(element_to_nodes.items(), key= lambda x: x[0]))
     return element_to_nodes
 
 def build_element_material_map(mesh):
@@ -95,6 +97,9 @@ def build_element_material_map(mesh):
         elif isinstance(value, (list, tuple)) and value:
             value = value[0]
         element_to_material[int(element_id)] = int(value)
+    
+    # Sort by element index
+    element_to_material = dict(sorted(element_to_material.items(), key=lambda x: x[0]))
     return element_to_material
 
 def write_mass_cfile(output_path: str, keyword_path: str, element_to_nodes):
@@ -245,6 +250,56 @@ def translate_model(keyword_path: str = None, output_path: str = None):
 
     print(f"Translated part 2 by (x={x:.2f}, y={y:.2f}, z={z:.2f})")
 
+def write_get_nodes_on_surface_cfile(keyword_path: str, output_path: str, part_id: int):
+    lines = [
+        "bgstyle plain",
+        f'openc keyword "{keyword_path}"',
+        "ident select 1",
+        "genselect target node",
+        "genselect 3dsurf on",
+        f"genselect node add part {part_id}",
+        "ident select 0",
+        "exit",
+    ]
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+def get_nodes_on_surface(keyword_path: str, part_id: int) -> List[int]:
+    dir_file = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(dir_file)
+    cfile_path = os.path.join(root, "cfile", "get_nodes_on_surface.cfile")
+    msg_path = os.path.join(root, "cfile", "lspost.msg")
+
+    write_get_nodes_on_surface_cfile(
+        keyword_path=keyword_path,
+        output_path=cfile_path,
+        part_id=part_id,
+    )
+
+    run_cfile_ls_prepost(cfile_path)
+
+    node_ids = []
+    node_id_re = re.compile(r"NODE ID=\s*(\d+)")
+    msg_path = Path(msg_path)
+    if not msg_path.is_file():
+        raise FileNotFoundError(f"LS-PrePost message file not found: {msg_path}")
+
+    with msg_path.open("r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            match = node_id_re.search(line)
+            if match:
+                node_ids.append(int(match.group(1)))
+
+    print(f"Nodes on surface of part {part_id}: {len(node_ids)}")
+
+    return node_ids
+
 if __name__ == "__main__":
     server = dpf.start_local_server(ansys_path=r"C:\Program Files\ANSYS Inc\v242", as_global=True)
-    translate_model()
+    # translate_model()
+    nodes_id = get_nodes_on_surface(
+        keyword_path=r"D:\Projects_code\ball_plate\output\ball_plate.k",
+        part_id=2,
+    )
+    print(len(nodes_id))

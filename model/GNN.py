@@ -1,13 +1,16 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, MessagePassing
 from sklearn.neighbors import KDTree
 from torch_geometric.nn import global_add_pool
 from torch_geometric.utils import add_self_loops, degree
+from torch_geometric.data import Data, Dataset
 from utils.data_loader import GraphData
 import numpy as np
 from model.message_passing_gnn import *
+
+TIME_SERIES = 3
+
 # =============================================
 # Build radius edges using KDTree (CPU)
 # =============================================
@@ -81,7 +84,7 @@ class TemporalEncoder(nn.Module):
 
     def forward(self, x, mass):
         """
-        x: node info (N, F, T)
+        x: node info (N, F * T)
         mass: node mass (N,)
         output: temporal node embedded features (N, H)
         """
@@ -96,7 +99,7 @@ class TemporalEncoder(nn.Module):
         return self.fc(h)                     # (N, H)
 
 class NormalEncoder(nn.Module):
-    def __init__(self, in_dim, hidden_dim, n_layers =3):
+    def __init__(self, in_dim, hidden_dim):
         super().__init__()
 
         self.fc = MLP([in_dim, hidden_dim, hidden_dim])
@@ -119,7 +122,7 @@ class MeshGraphNet(nn.Module):
             n_layers = n_temp_layers
         )
 
-        self.node_radius_encoder = MLP([6, latent_dim, latent_dim])
+        self.node_radius_encoder = MLP([3, latent_dim, latent_dim])
 
         # Edge encoder
         self.edge_encoder = MLP([edge_dim, latent_dim, latent_dim])
@@ -154,24 +157,25 @@ class MeshGraphNet(nn.Module):
 
     def forward(self, graph: GraphData):
         """
-        x: (N, F, T)  e.g., (1940, 12, 3) feat over time 
+        x: (N, F * T)  e.g., (1940, 12 * 3) feat over time 
         topo_edge_index: (2, E) FEM edges on GPU
         """
 
         device = graph.x.device
+        x = graph.x
 
         # -----------------------------------
         # 1. Extract coordinates at last time step
         # -----------------------------------
-        coords = graph.x[:, :3, -1]  # (N,3)
+        coords = x[:, -12 : -9]  # (N,3)
         topo_edge_index = graph.edge_index  # (2, E)
-        xv = graph.x[:, :6, -1]  # (N,6) position + velocity
+        # xv = x[:, -6]  # (N,6) position + velocity
 
         # -----------------------------------
         # 2. Node and edge encoder
         # -----------------------------------
-        h_topo = self.node_topo_encoder(graph.x, graph.node_mass)    # (N, H)
-        h_radius = self.node_radius_encoder(xv)   # (N, H)
+        h_topo = self.node_topo_encoder(x, graph.node_mass)    # (N, H)
+        h_radius = self.node_radius_encoder(coords)   # (N, H)
         edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
 
         # -----------------------------------
@@ -217,8 +221,88 @@ class MeshGraphNet(nn.Module):
         
         return delta_pred
     
+    def step(self, x, delta_pred, delta_t):
+        return x + delta_pred * delta_t
+    
     def loss(self, pred, target):
         return F.mse_loss(pred, target)
+
+
+class EncodeDecodeGNN(nn.Module):
+    def __init__(self, node_dim, edge_dim, out_dim, latent_dim=128, n_temp_layers=3, n_gnn_layers=4):
+        super().__init__()
+
+        # LSTM encoder for node temporal features
+        self.node_topo_encoder = TemporalEncoder(
+            in_dim = node_dim,
+            hidden_dim = latent_dim,
+            n_layers = n_temp_layers
+        )
+
+        self.node_surf_encoder = MLP([3, latent_dim, latent_dim])
+
+        # Edge encoder
+        self.edge_encoder = MLP([edge_dim, latent_dim, latent_dim])
+
+        # Message-passing layers
+        self.n_gnn_layers = n_gnn_layers
+        self.layers_topo = nn.ModuleList([
+            GraphNetBlock(
+                edge_feat_dim=latent_dim,
+                node_feat_dim=latent_dim,
+                hidden_dim=latent_dim)
+            for _ in range(n_gnn_layers)
+        ])
+
+        # Message-passing layers for nodes on surface
+        self.layers_surf = GraphNetSurfaceBlock(
+            hidden_dim=latent_dim)
+
+        self.add_passage = MLP([latent_dim + latent_dim, latent_dim])
+
+        # Decode node features (12)
+        self.node_decoder = MLP([latent_dim, latent_dim, out_dim])
+
+    def forward(self, graph):
+        """
+        x: (N, F, T)  e.g., (1940, 12, 3) feat over time 
+        topo_edge_index: (2, E) FEM edges on GPU
+        """
+
+        # -----------------------------------
+        # 1. Extract feature at time step t
+        # -----------------------------------
+        x_t = graph.x[:,:,-1]
+
+        # -----------------------------------
+        # 2. Encode node time series feature
+        # -----------------------------------
+        h_topo = self.node_topo_encoder(graph.x, graph.node_mass)    # (N, H)
+        
+        # 3. Encode node feature
+        edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+
+        # 4. Message passing for surface nodes -> node force
+        h_surf = self.layers_surf(graph.pos, graph.edge_surf_index)
+
+        surface_mask = torch.zeros(h_surf.size(0), device=h_surf.device, dtype=h_surf.dtype)
+        surface_mask.index_fill_(0, graph.edge_surf_index.view(-1), 1.0)
+        h_final = h_topo + h_surf * surface_mask.unsqueeze(-1)
+
+        # 5. Message passing with neighbor nodes
+        for layer in self.layers_topo:
+            h_final, edge_feat = layer(h_final, graph.edge_index, edge_feat)
+        
+        # -----------------------------------
+        # 6. Output prediction
+        # -----------------------------------
+        delta_pred = self.node_decoder(h_final)  # (N, out_dim)
+        y_t = x_t + delta_pred * graph.delta_t.unsqueeze(-1)
+        
+        return y_t
+    
+    def loss(self, pred, target):
+        return F.mse_loss(pred, target)    
 
 
 class PhysicsNet(nn.Module):
@@ -230,27 +314,42 @@ class PhysicsNet(nn.Module):
 
         # Potential energy MLP
         self.encode_node = MLP_layer_norm([6, hidden_dim, hidden_dim])
-        self.encode_element = MLP_layer_norm([hidden_dim + mat_emb_dim, hidden_dim, 1])
+        self.encode_element = MLP([hidden_dim + mat_emb_dim, hidden_dim, 1])
         self.mat_emb = nn.Embedding(2, mat_emb_dim)
 
     def forward(self, graph: GraphData):
-        node_feat = graph.x[:, :, -1]  # (N, F)
+        x = graph.x
+        if x.dim() == 2:
+            if x.shape[1] % 12 != 0:
+                raise ValueError(f"Expected x feature dim to be multiple of 12, got {x.shape[1]}")
+            num_series = x.shape[1] // 12
+            x = x.reshape(x.shape[0], 12, num_series)
+        node_feat = x[:, :, -1]  # (N, F)
         x_0 = graph.x_initial  # (N, 3)
-        u = node_feat[:, -3:]    # (N, 3) displacement
-        v = node_feat[:, 3:6]  # (N, 3) velocities
+        v = node_feat[:, 6:9]  # (N, 3) velocities
+        u = node_feat[:, 9:]    # (N, 3) displacement
         m = graph.node_mass    # (N, ) mass
 
         # Kinetic energy
         kinetic_energy = self.global_kinetic_energy(m, v)  # scalar
 
         # Potential energy 
-        element_to_nodes = graph.element_to_nodes  # {element_id: [node_ids, ]}
-        element_materials = graph.element_materials  # {element_id: material_id}
-        internal_energy = self.global_internal_energy(element_to_nodes, element_materials, u, x_0)  # scalar
+        if graph.element_node_ids is not None and graph.element_material_ids is not None:
+            internal_energy = self.global_internal_energy_fast(
+                u,
+                x_0,
+                graph.element_node_ids,
+                graph.element_node_mask,
+                graph.element_material_ids,
+            )
+        else:
+            element_to_nodes = graph.element_to_nodes  # {element_id: [node_ids, ]}
+            element_materials = graph.element_materials  # {element_id: material_id}
+            internal_energy = self.global_internal_energy(element_to_nodes, element_materials, u, x_0)  # scalar
         return kinetic_energy, internal_energy
     
     def global_kinetic_energy(self, m, v):
-        K = 0.5 * m * (v.pow(2).sum(dim=1, keepdim=True))
+        K = 0.5 * m * (v.pow(2).sum(dim=1))
         return K.sum()
     
     def global_internal_energy(self, element_to_nodes, element_materials, u, x_0):
@@ -278,12 +377,43 @@ class PhysicsNet(nn.Module):
 
         return U
 
+    def global_internal_energy_fast(self, u, x_0, element_node_ids, element_node_mask, element_material_ids):
+        safe_ids = element_node_ids.clamp(min=0)
+        u_e = u[safe_ids]     # (E, K, 3)
+        x0_e = x_0[safe_ids]  # (E, K, 3)
+        if element_node_mask is not None:
+            mask = element_node_mask.unsqueeze(-1)
+            u_e = u_e * mask
+            x0_e = x0_e * mask
+            counts = element_node_mask.sum(dim=1, keepdim=True).clamp(min=1).unsqueeze(-1)
+            u_mean = u_e.sum(dim=1, keepdim=True) / counts
+            x0_mean = x0_e.sum(dim=1, keepdim=True) / counts
+        else:
+            u_mean = u_e.mean(dim=1, keepdim=True)
+            x0_mean = x0_e.mean(dim=1, keepdim=True)
+
+        u_rel = u_e - u_mean
+        x0_rel = x0_e - x0_mean
+
+        features = torch.cat([u_rel, x0_rel], dim=2)  # (E, K, 6)
+        elem_latent = self.encode_node(features.reshape(-1, 6)).view(features.size(0), features.size(1), -1)
+        if element_node_mask is not None:
+            elem_latent = elem_latent * element_node_mask.unsqueeze(-1)
+            elem_latent = elem_latent.sum(dim=1) / counts.squeeze(-1)
+        else:
+            elem_latent = elem_latent.mean(dim=1)
+
+        mat_feat = self.mat_emb(element_material_ids.long() - 1)
+        element_feat = torch.cat([elem_latent, mat_feat], dim=1)
+        element_ie = self.encode_element(element_feat).squeeze(-1)
+        return F.softplus(element_ie).sum()
+
     def loss(self, kinetic_energy_pred, internal_energy_pred, kinetic_energy_true, internal_energy_true):
         # delta_x_pre = delta_pred[:, 3]
         # delta_disp_pre = delta_pred[:, -3:]
         # loss_consistence = F.mse_loss(delta_x_pre, delta_disp_pre[:, 0])
-        loss_kinetic = F.mse_loss(kinetic_energy_pred, kinetic_energy_true)
-        loss_internal = F.mse_loss(internal_energy_pred, internal_energy_true)
+        loss_kinetic = F.l1_loss(kinetic_energy_pred, kinetic_energy_true)
+        loss_internal = F.l1_loss(internal_energy_pred, internal_energy_true)
         return loss_kinetic + loss_internal
 
 if __name__ == "__main__":

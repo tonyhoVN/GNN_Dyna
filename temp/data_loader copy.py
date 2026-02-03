@@ -8,58 +8,66 @@ from torch_geometric.data import Data
 
 # Custom dataset class for loading FEM simulation data
 
-class GraphData(Data):
+@dataclass
+class GraphData:
     """
-    Generic graph container for GNNs (PyG-compatible).
+    Generic graph container for GNNs.
     """
+    x: torch.Tensor                 # Node kinetics features (N, F*T)
+    y: torch.Tensor                 # Labels / targets (N, F)
+    x_initial: torch.Tensor         # Initial node coordinates (N, 3)
+    node_mass: torch.Tensor         # Node mass (N, )
+    delta_t: torch.Tensor           # Time step information (scalar)
+    edge_index: torch.Tensor        # Edge list (2, E)
+    edge_attr: Optional[torch.Tensor] = None  # Edge features (E, D)
+    edge_surf_index: Optional[torch.Tensor] = None
+    # element_to_nodes: Optional[dict] = None  # {element_id: [node_ids, ]}
+    # element_materials: Optional[dict] = None # {element_id: material_id}
+    element_node_ids: Optional[torch.Tensor] = None  # (El, K) padded with -1
+    element_node_mask: Optional[torch.Tensor] = None  # (El, K) bool
+    element_materials: Optional[torch.Tensor] = None  # (El,)
+    total_internal_energy: Optional[torch.Tensor] = None
+    total_kinetic_energy: Optional[torch.Tensor] = None
 
-    def __init__(
-        self,
-        x: torch.Tensor,                 # (N, F*T)
-        edge_index: torch.Tensor,        # (2, E)
-        y: torch.Tensor,
-        x_initial: torch.Tensor,     # (N, 3)
-        pos: torch.Tensor,
-        node_mass: Optional[torch.Tensor] = None,     # (N,)
-        delta_t: Optional[torch.Tensor] = None,       # scalar
-        edge_attr: Optional[torch.Tensor] = None,     # (E, D)
-        edge_surf_index: Optional[torch.Tensor] = None,
-        element_node_ids: Optional[torch.Tensor] = None,   # (E_elem, K) padded with -1
-        element_node_mask: Optional[torch.Tensor] = None,  # (E_elem, K) bool
-        element_materials: Optional[torch.Tensor] = None,  # (E_elem,)
-        total_internal_energy: Optional[torch.Tensor] = None,  # (2,) 
-        total_kinetic_energy: Optional[torch.Tensor] = None,   # (2,)
-    ):
-        super().__init__(
-            x=x,
-            edge_index=edge_index,
-            edge_attr=edge_attr,
-            y=y,
-            x_initial=x_initial,
-            pos=pos,
-            node_mass=node_mass,
-            delta_t=delta_t,
-            edge_surf_index=edge_surf_index,
-            element_node_ids=element_node_ids,
-            element_node_mask=element_node_mask,
-            element_materials=element_materials,
-            total_internal_energy=total_internal_energy,
-            total_kinetic_energy=total_kinetic_energy,
+    def to(self, device):
+        # element_to_nodes = self.element_to_nodes
+        # if element_to_nodes is not None:
+        #     if isinstance(element_to_nodes, dict):
+        #         element_to_nodes = {
+        #             eid: torch.tensor(node_ids, dtype=torch.long, device=device)
+        #             for eid, node_ids in element_to_nodes.items()
+        #         }
+        #     else:
+        #         element_to_nodes = torch.as_tensor(element_to_nodes, dtype=torch.long, device=device)
+
+        # element_materials = self.element_materials
+        # if element_materials is not None:
+        #     if isinstance(element_materials, dict):
+        #         element_materials = {
+        #             eid: torch.tensor(mat, dtype=torch.float, device=device)
+        #             for eid, mat in element_materials.items()
+        #         }
+        #     else:
+        #         element_materials = torch.as_tensor(element_materials, dtype=torch.float, device=device)
+
+        return GraphData(
+            x=self.x.to(device),
+            y=self.y.to(device),
+            x_initial=self.x_initial.to(device),
+            node_mass=self.node_mass.to(device),
+            delta_t=self.delta_t.to(device) if self.delta_t is not None else None,
+            edge_index=self.edge_index.to(device),
+            edge_attr=self.edge_attr.to(device) if self.edge_attr is not None else None,
+            edge_surf_index=self.edge_surf_index.to(device) if self.edge_attr is not None else None,
+            # element_to_nodes=element_to_nodes,
+            # element_materials=element_materials,
+            element_node_ids=self.element_node_ids.to(device) if self.element_node_ids is not None else None,
+            element_node_mask=self.element_node_mask.to(device) if self.element_node_mask is not None else None,
+            element_materials=self.element_materials.to(device) if self.element_material_ids is not None else None,
+            total_internal_energy=self.total_internal_energy.to(device) if self.total_internal_energy is not None else None,
+            total_kinetic_energy=self.total_kinetic_energy.to(device) if self.total_kinetic_energy is not None else None,
         )
-
-    def __inc__(self, key, value, *args, **kwargs):
-        if key in ["edge_index", "edge_surf_index", "element_node_ids"]:
-            return self.num_nodes
-        return super().__inc__(key, value, *args, **kwargs)
-
-    def __cat_dim__(self, key, value, *args, **kwargs):
-        if key in ["edge_index", "edge_surf_index"]:
-            return 1
-        if key in ["element_node_ids", "element_node_mask", "element_materials"]:
-            return 0
-        return super().__cat_dim__(key, value, *args, **kwargs)        
     
-
 class FEMDataset(Dataset):
     def __init__(self, data_path, geometry_path: str = None):
         """
@@ -85,9 +93,6 @@ class FEMDataset(Dataset):
         # Node features and its prediction
         self.X_list = kinematic_data['X_list'] # list[(N, F, T)] size = time_steps
         self.Y_list = kinematic_data['Y_list'] # list[(N, F,)] size = time_steps
-
-        # Node position
-        self.pos_list = kinematic_data['pos_list']
         
         # Time intervals
         self.Delta_t = kinematic_data['Delta_t'] # N
@@ -113,7 +118,7 @@ class FEMDataset(Dataset):
             self.edge_attr = torch.as_tensor(geometry_data["edge_attr"], dtype=torch.float) # (E, D)
 
         # Load surface connectivity
-        edge_surf_index = torch.as_tensor(geometry_data["edge_surf_index"], dtype=torch.long) 
+        edge_surf_index = torch.as_tensor(geometry_data["edge_index"], dtype=torch.long) 
         if edge_surf_index.ndim == 2 and edge_surf_index.shape[0] != 2 and edge_surf_index.shape[1] == 2:
             edge_surf_index = edge_surf_index.t().contiguous()
         self.edge_surf_index = edge_surf_index # (2, E_s)
@@ -136,7 +141,8 @@ class FEMDataset(Dataset):
             self.element_to_nodes = dict(sorted(self.element_to_nodes.items(), key=lambda kv: kv[0]))
 
         # Load element to material mapping
-        self.element_materials = torch.tensor(geometry_data["element_materials"]) # (E,)
+        self.element_materials = geometry_data["element_materials"] # (E,)
+
 
         # Precompute padded element node ids + materials for fast PhysicsNet
         self.element_node_ids = None
@@ -163,7 +169,6 @@ class FEMDataset(Dataset):
     def __getitem__(self, idx):
         current_state = torch.as_tensor(self.X_list[idx], dtype=torch.float)  # (N, F, T)
         predict_feature = torch.as_tensor(self.Y_list[idx], dtype=torch.float)    # (N, F,)
-        node_pos = torch.as_tensor(self.pos_list[idx], dtype=torch.float)  # (N, 3)
         delta_t = torch.as_tensor(self.Delta_t[idx], dtype=torch.float)  # scalar
         total_internal_energy = None
         if self.total_internal_energy is not None:
@@ -175,9 +180,8 @@ class FEMDataset(Dataset):
             x=current_state,
             y=predict_feature,
             x_initial=self.X_initial,
-            pos=node_pos,
-            delta_t=delta_t,
             node_mass=self.node_mass,
+            delta_t=delta_t,
             edge_index=self.edge_index,
             edge_attr=self.edge_attr,
             edge_surf_index=self.edge_surf_index,
@@ -227,5 +231,5 @@ def load_data_example():
             print(g.edge_attr.shape)
             print(g.edge_index.numel())
         break
-# if __name__ == "__main__":
-#     load_data_example()
+if __name__ == "__main__":
+    load_data_example()

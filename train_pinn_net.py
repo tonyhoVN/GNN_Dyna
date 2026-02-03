@@ -140,8 +140,8 @@ def main():
                     loss = model.loss(
                         k_pred,
                         u_pred,
-                        graph.total_kinetic_energy,
-                        graph.total_internal_energy,
+                        graph.total_kinetic_energy[0],
+                        graph.total_internal_energy[0],
                     )
                     val_loss += loss.item()
                     val_graphs += 1
