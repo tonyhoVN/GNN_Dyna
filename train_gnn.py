@@ -9,16 +9,20 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from utils.data_loader import FEMDataset
 from model.GNN import EncodeDecodeGNN
+import wandb
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train MeshGraphNet")
-    parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
+    parser.add_argument("--epochs", type=int, default=1000, help="Number of training epochs")
     parser.add_argument(
         "--save-every",
         type=int,
-        default=10,
+        default=20,
         help="Save model checkpoint every N epochs",
     )
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size")
+    parser.add_argument("--learning-rate", type=float, default=1e-5, help="Learning rate")
+    parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden dim of GNN")
     return parser.parse_args()
 
 args = parse_args()
@@ -26,8 +30,29 @@ args = parse_args()
 # Load dataset
 root = os.getcwd()
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-data_dir = os.path.join(root, "data")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Run on device: {device}")
+
+# Setup wandb 
+run = wandb.init(
+    # Set the wandb entity where your project will be logged (generally your team name).
+    entity="tonyho-stony-brook-university",
+    # Set the wandb project where this run will be logged.
+    project="Physics-informed Graph neural net",
+    # Track hyperparameters and run metadata.
+    config={
+        "learning_rate": args.learning_rate,
+        "batch_size": args.batch_size,
+        "hidden_dim": args.hidden_dim,
+        "architecture": "EncodeDecodeGNN",
+        "dataset": "LSDyna",
+        "epochs": args.epochs,
+        "timestamp": timestamp
+    },
+)
+
+# Load dataset
+data_dir = os.path.join(root, "data")
 
 npz_files = sorted(
     os.path.join(data_dir, name)
@@ -53,11 +78,11 @@ train_dataset, valid_dataset, test_dataset = random_split(
 )
 
 train_loader = DataLoader(
-    train_dataset, batch_size=5, shuffle=True
+    train_dataset, batch_size=args.batch_size, shuffle=True
 )
 
 valid_loader = DataLoader(
-    valid_dataset, batch_size=5, shuffle=False
+    valid_dataset, batch_size=args.batch_size, shuffle=False
 )
 
 # Initialize model and optimizer
@@ -68,8 +93,8 @@ edge_dim = ref_dataset.edge_attr.shape[1]
 model = EncodeDecodeGNN(node_dim=node_dim, 
                         edge_dim=edge_dim, 
                         out_dim=out_dim,
-                        latent_dim=64).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
+                        latent_dim=args.hidden_dim).to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
 # Print model summary
 num_params = sum(p.numel() for p in model.parameters())
@@ -81,7 +106,7 @@ epochs = args.epochs
 save_every = args.save_every
 loss_history = []
 model_dir = os.path.join(root, "save_model")
-log_dir = os.path.join(root, "train")
+log_dir = os.path.join(root, "train_log")
 os.makedirs(model_dir, exist_ok=True)
 os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, f"log_{timestamp}.txt")
@@ -96,7 +121,10 @@ def train():
         total_loss = 0.0
         for batch_graphs in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch"):
             batch_graphs = batch_graphs.to(device)
+            
+            # Add little noise for delta_t
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
+            batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
 
             y_predict = model(batch_graphs)
             batch_loss = model.loss(y_predict, batch_graphs.y)
@@ -130,12 +158,17 @@ def train():
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"{avg_loss}\n")
 
+        # Log to wandb
+        run.log({"train_loss": avg_loss, "val_loss": avg_val_loss})
+
         # Save model checkpoint
         if (epoch + 1) % save_every == 0:
             # save_path = os.path.join(model_dir, f"meshgraphnet_{timestamp}_epoch{epoch+1}.pt")
             torch.save(model.state_dict(), model_path)
             print(f"Saved model to {model_path}")
 
+    # Finish wandb and save log
+    run.finish()
     print(f"Saved loss history to {log_path}")
 
 def plot_loss():

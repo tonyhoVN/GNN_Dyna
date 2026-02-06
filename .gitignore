@@ -25,7 +25,8 @@ htmlcov/
 output/
 data/
 save_model/
-train_results/
+train_log/
+images/
 
 .idea/
 .vscode/

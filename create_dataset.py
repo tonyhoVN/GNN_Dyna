@@ -12,7 +12,7 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--num_runs",
+        "--num-runs",
         type=int,
         default=1,
         help="Number of runs to perform"
