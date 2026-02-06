@@ -232,7 +232,7 @@ if __name__ == "__main__":
     ]
 
     # Save geometry information
-    geometry_path = os.path.join(root, "data", "geometry_shared.npz")
+    geometry_path = "geometry_shared.npz"
     geometry_data = build_geometry_data(data_folders[0])
     np.savez_compressed(geometry_path, **geometry_data)
     print(f"Geometry data saved to: {geometry_path}")

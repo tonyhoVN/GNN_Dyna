@@ -76,9 +76,7 @@ class FEMDataset(Dataset):
         kinematic_data = np.load(data_path, allow_pickle=True)
         if geometry_path is None:
             if "geometry_path" in kinematic_data:
-                geometry_path = str(kinematic_data["geometry_path"])
-            else:
-                geometry_path = os.path.join(os.path.dirname(data_path), "geometry_shared.npz")
+                geometry_path = os.path.join(os.path.dirname(data_path), str(kinematic_data["geometry_path"]))
         if geometry_path and os.path.isfile(geometry_path):
             geometry_data = np.load(geometry_path, allow_pickle=True)
 
