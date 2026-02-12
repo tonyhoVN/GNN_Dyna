@@ -33,5 +33,7 @@ images/
 
 wandb/
 
+*.bib
+
 .DS_Store
 Thumbs.db

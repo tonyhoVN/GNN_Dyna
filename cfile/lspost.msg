@@ -1,8 +1,8 @@
 openc command "D:\Projects_code\ball_plate\cfile\get_nodes_on_surface.cfile" nodialog
 bgstyle plain
 openc keyword "D:\Projects_code\ball_plate\output\20260122_094004\ball_plate.k"
- Time to read keyword file =  0.023 seconds
- Time to process element data =  0.008 seconds
+ Time to read keyword file =  0.021 seconds
+ Time to process element data =  0.010 seconds
 Finished reading model
 ident select 1
 genselect target node

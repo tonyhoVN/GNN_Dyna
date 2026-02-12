@@ -1,10 +1,13 @@
+'''
+All models for GNN
+
+@author: Anh Tung Ho
+'''
+
 import torch
 from torch import nn
 import torch.nn.functional as F
 from sklearn.neighbors import KDTree
-from torch_geometric.nn import global_add_pool
-from torch_geometric.utils import add_self_loops, degree
-from torch_geometric.data import Data, Dataset
 from utils.data_loader import GraphData
 import numpy as np
 from model.message_passing_gnn import *
@@ -69,7 +72,7 @@ def combine_edges(topo_edge_index, radius_edge_index):
     return merged
 
 
-class TemporalEncoder(nn.Module):
+class TemporalEncoder1(nn.Module):
     def __init__(self, in_dim, hidden_dim, n_layers = 3):
         super().__init__()
 
@@ -97,6 +100,60 @@ class TemporalEncoder(nn.Module):
         h = torch.cat([h, mass.unsqueeze(-1)], dim=-1)  # (N, H+1)
 
         return self.fc(h)                     # (N, H)
+    
+class TemporalEncoder(nn.Module):
+    def __init__(
+            self, 
+            in_dim, 
+            hidden_dim, 
+            n_layers = 3,
+            use_mass = True,
+            use_pos = True,
+            ):
+        super().__init__()
+
+        self.lstm = nn.LSTM(
+            input_size=in_dim,
+            hidden_size=hidden_dim,
+            num_layers=n_layers,
+            batch_first=True
+        )
+
+        self.use_mass = use_mass
+        self.use_pos = use_pos
+        extra_dim = (1 if use_mass else 0) + (3 if use_pos else 0)
+
+        # self.fc = MLP([hidden_dim + extra_dim, hidden_dim, hidden_dim])  # +1 for mass feature
+        #                                                          # +3 for position feature
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim + extra_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+
+    def forward(self, x, mass, pos):
+        """
+        x: node info (N, F * T)
+        mass: node mass (N,)
+        output: temporal node embedded features (N, H)
+        """
+        # time series node encoder
+        x = x.permute(0, 2, 1).contiguous()   # (N, T, F)
+        out, (h_n, c_n) = self.lstm(x)        # h_n: (n_layers, N, H)
+        h = h_n[-1]                           # (N, H)
+
+        # Add other features
+        extras = []
+        if self.use_mass:
+            extras.append(mass.unsqueeze(-1))
+        if self.use_pos:
+            extras.append(pos)
+        h = torch.cat([h, *extras], dim=-1)  # (N, H+1+3)
+
+        # h = torch.cat([h, pos, mass.unsqueeze(-1)], dim=-1)  # (N, H+1+3)
+
+        return self.fc(h)                     # (N, H)
 
 class NormalEncoder(nn.Module):
     def __init__(self, in_dim, hidden_dim):
@@ -110,9 +167,28 @@ class NormalEncoder(nn.Module):
         output: node embedded features (N, H)
         """
         return self.fc(x)                     # (N, H)
+
+class EdgeEncoder(nn.Module):
+    def __init__(self, num_materials: int, mat_emb_dim: int, numeric_dim: int, out_dim: int):
+        super().__init__()
+        self.mat_emb = nn.Embedding(num_materials, mat_emb_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(mat_emb_dim + numeric_dim, out_dim),
+            nn.LayerNorm(out_dim),
+            nn.GELU(),
+            nn.Linear(out_dim, out_dim)
+        )
+
+    def forward(self, edge_attr: torch.Tensor) -> torch.Tensor:
+        # edge_attr: (E, 2) -> [material_id, length]
+        mat_id = edge_attr[:, 0].long()
+        numeric = edge_attr[:, 1:]
+        emb = self.mat_emb(mat_id)
+        feat = torch.cat([emb, numeric], dim=-1)
+        return self.mlp(feat)
  
 class MeshGraphNet(nn.Module):
-    def __init__(self, node_dim, edge_dim, out_dim, latent_dim=128, n_temp_layers=3, n_gnn_layers=4):
+    def __init__(self, node_dim, edge_dim, out_dim, latent_dim=128, n_temp_layers=3, n_gnn_layers=4, num_materials=2, mat_emb_dim=4):
         super().__init__()
 
         # LSTM encoder for node temporal features
@@ -124,8 +200,8 @@ class MeshGraphNet(nn.Module):
 
         self.node_radius_encoder = MLP([3, latent_dim, latent_dim])
 
-        # Edge encoder
-        self.edge_encoder = MLP([edge_dim, latent_dim, latent_dim])
+        # Edge encoder (material id embedding + numeric features)
+        self.edge_encoder = EdgeEncoder(num_materials=num_materials, mat_emb_dim=mat_emb_dim, numeric_dim=max(edge_dim - 1, 0), out_dim=latent_dim)
 
         # Message-passing layers
         self.n_gnn_layers = n_gnn_layers
@@ -229,7 +305,7 @@ class MeshGraphNet(nn.Module):
 
 
 class EncodeDecodeGNN(nn.Module):
-    def __init__(self, node_dim, edge_dim, out_dim, latent_dim=128, n_temp_layers=3, n_gnn_layers=4):
+    def __init__(self, node_dim, edge_dim, out_dim, latent_dim=128, n_temp_layers=3, n_gnn_layers=4, num_materials=2, mat_emb_dim=4):
         super().__init__()
 
         # LSTM encoder for node temporal features
@@ -239,10 +315,8 @@ class EncodeDecodeGNN(nn.Module):
             n_layers = n_temp_layers
         )
 
-        self.node_surf_encoder = MLP([3, latent_dim, latent_dim])
-
-        # Edge encoder
-        self.edge_encoder = MLP([edge_dim, latent_dim, latent_dim])
+        # Edge encoder (material id embedding + numeric features)
+        self.edge_encoder = EdgeEncoder(num_materials=num_materials, mat_emb_dim=mat_emb_dim, numeric_dim=max(edge_dim - 1, 0), out_dim=latent_dim)
 
         # Message-passing layers
         self.n_gnn_layers = n_gnn_layers
@@ -279,7 +353,7 @@ class EncodeDecodeGNN(nn.Module):
         # -----------------------------------
         h_topo = self.node_topo_encoder(graph.x, graph.node_mass)    # (N, H)
         
-        # 3. Encode node feature
+        # 3. Encode edge feature
         edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
 
         # 4. Message passing for surface nodes -> node force
@@ -302,8 +376,62 @@ class EncodeDecodeGNN(nn.Module):
         return y_t
     
     def loss(self, pred, target):
-        return F.mse_loss(pred, target)    
+        return F.mse_loss(pred, target) 
 
+
+class EncodeDecodeGNNGeneral(nn.Module):
+    def __init__(self, 
+                 node_encoder, 
+                 edge_encorder, 
+                 gnn_topo, 
+                 gnn_surface,
+                 node_decoder
+    ):
+        super().__init__()
+        self.node_encoder = node_encoder
+        self.edge_encoder = edge_encorder
+        self.layers_topo  = gnn_topo
+        self.layers_surf  = gnn_surface
+        self.node_decoder = node_decoder
+
+    def forward(self, graph):
+        # 1. Extract feature at time step t
+        x_t = graph.x[:,:,-1] # (N, H)
+
+        # 2. Encode node time series feature
+        h_topo = self.node_encoder(graph.x, graph.node_mass, graph.pos)    # (N, H)
+
+        # 3. Encode edge feature
+        edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+
+        # 4. Message passing with neighbor nodes for internal force
+        for layer in self.layers_topo:
+            h_topo, edge_feat = layer(h_topo, graph.edge_index, edge_feat) # (N, H)
+
+        # 5. Message passing with surface nodes for contact force
+        if self.layers_surf is None:
+            h_surf = torch.zeros_like(h_topo)
+        # elif isinstance(self.layers_surf, nn.ModuleList):
+        #     if len(self.layers_surf) == 0:
+        #         h_surf = torch.zeros_like(h_topo)
+        #     else:
+        #         h_surf = self.layers_surf[0](graph.pos, graph.edge_surf_index)
+        else:
+            h_surf = self.layers_surf(graph.pos, graph.edge_surf_index) # (N, H)
+
+        # 6. Combine node features 
+        surface_mask = torch.zeros(h_surf.size(0), device=h_surf.device, dtype=h_surf.dtype)
+        surface_mask.index_fill_(0, graph.edge_surf_index.view(-1), 1.0)
+        h_final = h_topo + h_surf * surface_mask.unsqueeze(-1) # (N, H)
+   
+        # 7. Decode and output predict
+        delta_pred = self.node_decoder(h_final)  # (N, out_dim)
+        y_t = x_t + delta_pred * graph.delta_t.unsqueeze(-1) 
+
+        return y_t
+    
+    def loss(self, pred, target):
+        return F.mse_loss(pred, target)
 
 class PhysicsNet(nn.Module):
     """

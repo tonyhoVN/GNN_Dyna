@@ -1,7 +1,6 @@
 ansys_api_acp==0.1.0.dev9
 ansys_api_additive==1.7.2
 ansys_api_dbu==0.3.4
-ansys_api_dyna==0.3.6
 ansys_api_dyna==0.4.1
 ansys_api_edb==1.0.5
 ansys_api_fluent==0.3.27
@@ -16,7 +15,6 @@ ansys_api_sherlock==0.1.27
 ansys_api_systemcoupling==0.1.0
 ansys_api_tools_filetransfer==0.1.0
 ansys_api_workbench==0.2.0
-ansys_dpf_core==0.13.2
 ansys_dpf_core==0.13.4
 ansys_dynamicreporting_core==0.6.0
 ansys_mapdl_reader==0.54.1
@@ -24,10 +22,9 @@ ansys_mechanical_env==0.1.7
 ansys_turbogrid_api==0.4.3
 lsdyna_mesh_reader==0.1.4
 matplotlib==3.10.8
-numpy==2.4.2
-pandas==3.0.0
-scikit_learn==1.8.0
-torch==2.9.0+cu126
+# numpy==2.4.2
+# pandas==3.0.0
+# scikit_learn==1.8.0
+# torch==2.9.0+cu126
 torch_geometric==2.7.0
-tqdm==4.67.0
 tqdm==4.67.1

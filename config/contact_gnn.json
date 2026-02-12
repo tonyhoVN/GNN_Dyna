@@ -1,0 +1,35 @@
+{
+  "data": {
+    "data_dir": "data",
+    "file_glob": "*data.npz"
+  },
+  "split": {
+    "train": 0.75,
+    "valid": 0.15,
+    "test": 0.1
+  },
+  "model": {
+    "hidden_dim": 256,
+    "node_encoder": {
+      "lstm_layers": 3,
+      "use_mass": true,
+      "use_pos": true
+    },
+    "edge_encoder": {
+      "num_materials": 2,
+      "mat_emb_dim": 5
+    },
+    "gnn_topology": {
+      "n_gnn_layers": 5
+    },
+    "gnn_surface": {
+      "enabled": true
+    }
+  },
+  "training": {
+    "batch_size": 8,
+    "learning_rate": 5e-5,
+    "epochs": 100,
+    "save_every": 10
+  }
+}
