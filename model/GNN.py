@@ -404,10 +404,6 @@ class EncodeDecodeGNNGeneral(nn.Module):
         # 3. Encode edge feature
         edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
 
-        # 4. Message passing with neighbor nodes for internal force
-        for layer in self.layers_topo:
-            h_topo, edge_feat = layer(h_topo, graph.edge_index, edge_feat) # (N, H)
-
         # 5. Message passing with surface nodes for contact force
         if self.layers_surf is None:
             h_surf = torch.zeros_like(h_topo)
@@ -423,7 +419,11 @@ class EncodeDecodeGNNGeneral(nn.Module):
         surface_mask = torch.zeros(h_surf.size(0), device=h_surf.device, dtype=h_surf.dtype)
         surface_mask.index_fill_(0, graph.edge_surf_index.view(-1), 1.0)
         h_final = h_topo + h_surf * surface_mask.unsqueeze(-1) # (N, H)
-   
+
+        # 4. Message passing with neighbor nodes for internal force
+        for layer in self.layers_topo:
+            h_final, edge_feat = layer(h_final, graph.edge_index, edge_feat) # (N, H)
+
         # 7. Decode and output predict
         delta_pred = self.node_decoder(h_final)  # (N, out_dim)
         y_t = x_t + delta_pred * graph.delta_t.unsqueeze(-1) 
