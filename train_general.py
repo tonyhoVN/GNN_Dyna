@@ -120,8 +120,9 @@ def main():
         total_loss = 0.0
         for batch_graphs in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch"):
             batch_graphs = batch_graphs.to(device)
-            if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
-                batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
+            # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
+            batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
+            batch_graphs.delta_t = batch_graphs.delta_t - 0.002 * torch.rand_like(batch_graphs.delta_t)
 
             y_predict = model(batch_graphs)
             batch_loss = model.loss(y_predict, batch_graphs.y)
@@ -138,8 +139,8 @@ def main():
         with torch.no_grad():
             for batch_graphs in valid_loader:
                 batch_graphs = batch_graphs.to(device)
-                if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
-                    batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
+                # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
+                batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
                 y_predict = model(batch_graphs)
                 val_loss += model.loss(y_predict, batch_graphs.y).item()
 
