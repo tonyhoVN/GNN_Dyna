@@ -107,6 +107,7 @@ class TemporalEncoder(nn.Module):
             in_dim, 
             hidden_dim, 
             n_layers = 3,
+            layer_norm = False,
             use_mass = True,
             use_pos = True,
             ):
@@ -123,15 +124,8 @@ class TemporalEncoder(nn.Module):
         self.use_pos = use_pos
         extra_dim = (1 if use_mass else 0) + (3 if use_pos else 0)
 
-        # self.fc = MLP([hidden_dim + extra_dim, hidden_dim, hidden_dim])  # +1 for mass feature
-        #                                                          # +3 for position feature
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_dim + extra_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
-
+        self.fc = MLP([hidden_dim + extra_dim, hidden_dim, hidden_dim], layer_norm)  # +1 for mass feature
+                                                                 # +3 for position feature
     def forward(self, x, mass, pos):
         """
         x: node info (N, F * T)
@@ -169,15 +163,15 @@ class NormalEncoder(nn.Module):
         return self.fc(x)                     # (N, H)
 
 class EdgeEncoder(nn.Module):
-    def __init__(self, num_materials: int, mat_emb_dim: int, numeric_dim: int, out_dim: int):
+    def __init__(self, 
+                 num_materials: int, 
+                 mat_emb_dim: int, 
+                 numeric_dim: int, 
+                 out_dim: int,
+                 layer_norm = False):
         super().__init__()
         self.mat_emb = nn.Embedding(num_materials, mat_emb_dim)
-        self.mlp = nn.Sequential(
-            nn.Linear(mat_emb_dim + numeric_dim, out_dim),
-            nn.LayerNorm(out_dim),
-            nn.GELU(),
-            nn.Linear(out_dim, out_dim)
-        )
+        self.mlp = MLP([mat_emb_dim + numeric_dim, out_dim, out_dim], layer_norm)
 
     def forward(self, edge_attr: torch.Tensor) -> torch.Tensor:
         # edge_attr: (E, 2) -> [material_id, length]
@@ -399,7 +393,7 @@ class EncodeDecodeGNNGeneral(nn.Module):
         x_t = graph.x[:,:,-1] # (N, H)
 
         # 2. Encode node time series feature
-        h_topo = self.node_encoder(graph.x, graph.node_mass, graph.pos)    # (N, H)
+        h_topo = self.node_encoder(graph.x, graph.node_mass, graph.x_initial)    # (N, H)
 
         # 3. Encode edge feature
         edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)

@@ -15,12 +15,14 @@ def MLP_layer_norm(channels):
     layers.append(nn.LayerNorm(channels[-1]))
     return nn.Sequential(*layers)
 
-def MLP(channels):
+def MLP(channels, layer_norm = False):
     layers = []
     for i in range(len(channels)-1):
         layers.append(nn.Linear(channels[i], channels[i+1]))
         if i < len(channels)-2:
             layers.append(nn.GELU())
+    if layer_norm: 
+        layers.append(nn.LayerNorm[channels[-1]])
     return nn.Sequential(*layers)
 
 # =============================================
@@ -69,13 +71,13 @@ class GraphNetBlockLayerNorm(MessagePassing):
         return self.node_net(tmp)
 
 class GraphNetBlock(MessagePassing):
-    def __init__(self, edge_feat_dim, node_feat_dim, hidden_dim):
+    def __init__(self, edge_feat_dim, node_feat_dim, hidden_dim, layer_norm = False):
         super().__init__(aggr='add')
 
         # egde update net: eij' = f1(xi, xj, eij)
         self.edge_net = MLP([edge_feat_dim + 2*node_feat_dim, 
                              hidden_dim, 
-                             hidden_dim])
+                             hidden_dim], )
 
         # redidual node update net: xi' = xi + f2(xi, sum(eij')) 
         self.node_net = MLP([hidden_dim + node_feat_dim, 

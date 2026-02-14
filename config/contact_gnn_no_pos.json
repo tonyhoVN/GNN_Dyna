@@ -20,7 +20,7 @@
       "mat_emb_dim": 5
     },
     "gnn_topology": {
-      "n_gnn_layers": 5
+      "n_gnn_layers": 4
     },
     "gnn_surface": {
       "enabled": true
