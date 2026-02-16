@@ -9,30 +9,35 @@
     "test": 0.1
   },
   "model": {
+    "type": "force",
     "hidden_dim": 256,
     "node_encoder": {
-      "node_feat_dim": 6,
-      "lstm_layers": 3,
-      "use_mass": true,
-      "use_pos": true,
-      "layer_norm": true
+      "feat_dim": 6,
+      "layer_norm": false
     },
     "edge_encoder": {
-      "edge_feat_dim": 5,
+      "feat_dim": 2,
       "num_materials": 2,
       "mat_emb_dim": 5,
-      "layer_norm": true
+      "layer_norm": false
     },
     "gnn_topology": {
-      "n_gnn_layers": 4,
-      "layer_norm": false
+      "n_gnn_layers": 4
     },
     "gnn_surface": {
-      "enabled": true,
-      "layer_norm": false
+      "enabled": true
     },
-    "node_decoder": {
-      "layer_norm": false
+    "head_topo": {
+      "out_dim": 3
+    },
+    "head_surface": {
+      "out_dim": 3
+    },
+    "decoder": {
+      "in_dim": 9,
+      "hidden_dim": 256,
+      "n_layers": 2,
+      "out_dim": 6
     }
   },
   "training": {

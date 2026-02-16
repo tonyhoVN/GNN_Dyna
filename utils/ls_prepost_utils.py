@@ -32,6 +32,11 @@ REAL_EDGES = {
     ]
 }
 
+MATERIAL_PROPERTIES = {
+    0: [207, 0.3, 0, 0, 1, 0], # Rigid mat [E, nu, 0, 0, 1, 0]
+    1: [207, 0.3, 0.2, 2, 0, 1] # Elastic mat [E, nu, sigma_y, E_t, 0, 1]
+}
+
 def read_element_masses(msg_path: Union[str, Path]) -> List[Tuple[int, float]]:
     """
     Parse LS-PrePost .msg output and return (element_id, mass) pairs.

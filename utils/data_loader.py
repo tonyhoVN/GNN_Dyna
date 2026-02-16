@@ -15,9 +15,9 @@ class GraphData(Data):
 
     def __init__(
         self,
-        x: torch.Tensor,                 # (N, F*T)
+        x: torch.Tensor,                 # (N, F, T)
         edge_index: torch.Tensor,        # (2, E)
-        y: torch.Tensor,
+        y: torch.Tensor,                # (N, F)
         x_initial: torch.Tensor,     # (N, 3)
         pos: torch.Tensor,
         node_mass: Optional[torch.Tensor] = None,     # (N,)

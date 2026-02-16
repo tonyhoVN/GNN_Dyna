@@ -22,7 +22,7 @@ def MLP(channels, layer_norm = False):
         if i < len(channels)-2:
             layers.append(nn.GELU())
     if layer_norm: 
-        layers.append(nn.LayerNorm[channels[-1]])
+        layers.append(nn.LayerNorm(channels[-1]))
     return nn.Sequential(*layers)
 
 # =============================================
@@ -139,6 +139,37 @@ class GraphNetSurfaceBlock(MessagePassing):
         tmp = torch.cat([aggr_out, pos], dim=-1)      # (N, H+3)
         node_force_en = self.node_net(tmp)            # (N, H)
         return node_force_en                          # embedded contact force
+    
+class GraphNetSurfaceBlockForce(MessagePassing):
+    def __init__(self, hidden_dim: int):
+        super().__init__(aggr='add')
+        self.hidden_dim = hidden_dim
+        self.edge_net = MLP([8, 64, 64])
+        self.node_net = MLP([64 + 1, hidden_dim, hidden_dim ])
+
+    def forward(self, x, edge_index):
+        if edge_index is None or edge_index.numel() == 0:
+            return x.new_zeros(x.size(0), self.hidden_dim)
+        return self.propagate(edge_index, x=x)
+
+    def message(self, x_i, x_j):
+        # x = [u(0:3), v(3:6), p0(6:9)]
+        p_i = x_i[:, 0:3] + x_i[:, 6:9]
+        p_j = x_j[:, 0:3] + x_j[:, 6:9]
+
+        r = p_i - p_j                                # (E, 3)
+        d = torch.norm(r, dim=-1, keepdim=True)      # (E, 1)
+        r_hat = r / (d + 1e-8)                       # (E, 3)
+
+        v_rel = x_i[:, 3:6] - x_j[:, 3:6]            # (E, 3)
+        v_rel_n = (v_rel * r_hat).sum(-1, keepdim=True)  # (E, 1)
+
+        msg = torch.cat([r_hat, d, v_rel, v_rel_n], dim=-1)  # (E, 8)
+        return self.edge_net(msg)                      # (E, H)
+
+    def update(self, aggr_out, x):
+        aggr = torch.cat([aggr_out, x[:,-1]], dim=-1)
+        return self.node_net(aggr)  # (N, H)
 
 class GraphNetSurfaceBlockMHA_Dense(nn.Module):
     """

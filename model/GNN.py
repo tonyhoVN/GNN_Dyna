@@ -148,6 +148,22 @@ class TemporalEncoder(nn.Module):
         # h = torch.cat([h, pos, mass.unsqueeze(-1)], dim=-1)  # (N, H+1+3)
 
         return self.fc(h)                     # (N, H)
+    
+class GRUResidualDecoder(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim=6, n_layers=2):
+        super().__init__()
+        self.gru = nn.GRU(in_dim, hidden_dim, num_layers=n_layers, batch_first=True)
+        self.head = MLP([hidden_dim, hidden_dim, out_dim])
+
+    def forward(self, x_seq, dt=None):
+        # x_seq: (N, F, T)  -> convert to (N, T, F)
+        x_seq = x_seq.permute(0, 2, 1).contiguous()
+        N, T, _ = x_seq.shape
+
+        out, h_n = self.gru(x_seq)       # out: (N, T, H)
+        h_last = out[:, -1, :]            # (N, H)
+        return self.head(h_last)          # (N, 6) residual rates
+
 
 class NormalEncoder(nn.Module):
     def __init__(self, in_dim, hidden_dim):
@@ -426,6 +442,97 @@ class EncodeDecodeGNNGeneral(nn.Module):
     
     def loss(self, pred, target):
         return F.mse_loss(pred, target)
+    
+class EncoderDecodeGNNForce(EncodeDecodeGNNGeneral):
+    def __init__(self, 
+                 node_encoder, 
+                 edge_encorder, 
+                 gnn_topo,
+                 head_topo, 
+                 gnn_surface,
+                 head_surface,
+                 node_decoder
+    ):
+        super().__init__(node_encoder, 
+                 edge_encorder, 
+                 gnn_topo, 
+                 gnn_surface,
+                 node_decoder)
+        
+        self.head_topo = head_topo
+        self.head_surface = head_surface
+
+    def forward(self, graph):
+        # 1. Extract feature at time step t
+        X_t = graph.x[:,:,-1] # (N, 9)
+        a_t = X_t[:, 0:3] # (N, 3) acc
+        v_t = X_t[:, 3:6] # (N, 3) vel
+        u_t = X_t[:, 6:9] # (N, 3) disp
+        x_t = torch.cat([u_t, v_t, graph.x_initial, graph.node_mass.unsqueeze(-1)], dim=-1) # (N, 9)  
+
+        # 2. Encode node feature
+        h_node = self.node_encoder(x_t)    # (N, H)
+        h_surf = h_node.clone()
+        h_topo = h_node.clone()
+
+        # 3. Encode edge feature
+        edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+
+        # 4. Message passing with neighbor nodes for internal force
+        for layer in self.layers_topo:
+            h_topo, edge_feat = layer(h_topo, graph.edge_index, edge_feat) # (N, H)
+        
+        force_int = self.head_topo(h_topo) # (N, 3)
+
+        # 5. Message passing with surface nodes for contact force
+        if self.layers_surf is None:
+            h_surf = torch.zeros_like(h_surf)
+        else:
+            # TODO: select feature for surf
+            h_surf = self.layers_surf(x_t, graph.edge_surf_index) # (N, H)
+
+        force_ext = self.head_surface(h_surf) # (N, 3)
+
+        # 6. Combine node features 
+        surface_mask = torch.zeros(force_int.size(0), device=force_int.device, dtype=force_int.dtype)
+        surface_mask.index_fill_(0, graph.edge_surf_index.view(-1), 1.0)
+        force_total = force_int + force_ext * surface_mask.unsqueeze(-1) # (N, 3)
+
+        # 7. Predict acceleration
+        # a_t_pred = force_total / (graph.node_mass.unsqueeze(-1) * 1000) #scale to gram
+        a_t_pred = force_total
+        # Prepare for decode 
+        x_for_dec = graph.x.clone()
+        x_for_dec[:,0:3,-1] = a_t_pred.detach()
+
+
+        # 8. Baseline update  
+        dt = graph.delta_t.unsqueeze(-1)  # (N,1)
+        y_base = self.base_update(u_t, v_t, a_t_pred, dt)
+
+        # 7. Decode residual with time series
+        y_t = self.update(x_for_dec, y_base, dt)
+
+        # Loss
+        loss = self.loss_total(y_t, graph.y[:,3:], a_t_pred, a_t)
+        return y_t, loss
+    
+    def base_update(self, u_t, v_t, a_t, dt):
+        v_t1 = v_t + a_t * dt
+        u_t1 = u_t + v_t * dt + 0.5 * a_t * (dt**2)
+        return torch.cat([v_t1, u_t1], dim=-1) # (N, 6)
+
+    def update(self, x, y_base, dt):
+        delta_y_rate = self.node_decoder(x, dt)
+        y_final = y_base + delta_y_rate * dt
+        return y_final
+    
+    def loss_total(self, y_t, Y_t, a_t_pred, a_t):
+        L_acc = self.loss(a_t_pred, a_t)
+        L_state = self.loss(y_t, Y_t)
+        return L_acc + L_state
+
+        
 
 class PhysicsNet(nn.Module):
     """

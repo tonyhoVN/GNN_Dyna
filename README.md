@@ -31,7 +31,7 @@ Generate data automate
    `python -m data_process`
 
 5. Load data and train
-   `python -m train`
+   `python train_force.py --config config/contact_gnn_force.json`
 
 Test
 ------

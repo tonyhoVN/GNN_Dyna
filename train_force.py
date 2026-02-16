@@ -5,19 +5,19 @@ from datetime import datetime
 from glob import glob
 
 import torch
-import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, random_split
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-from utils.data_loader import FEMDataset
-from model.model_creation import ModelConfig, create_gnn_model
 import wandb
+
+from utils.data_loader import FEMDataset
+from model.model_creation import ModelConfig, create_gnn_force_model
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train GNN from JSON config")
-    parser.add_argument("--config", type=str, default="config/contact_gnn.json", help="Path to config JSON")
+    parser = argparse.ArgumentParser(description="Train force GNN from JSON config")
+    parser.add_argument("--config", type=str, default="config/contact_gnn_force.json", help="Path to config JSON")
     parser.add_argument("--epochs", type=int, default=None, help="Override epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     parser.add_argument("--learning-rate", type=float, default=None, help="Override learning rate")
@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("--save-every", type=int, default=None, help="Override save-every")
     parser.add_argument("--data-dir", type=str, default=None, help="Override data dir")
     parser.add_argument("--file-glob", type=str, default=None, help="Override file glob")
+    parser.add_argument("--dt-noise", type=float, default=0.002, help="Std dev of additive delta_t noise in training")
     return parser.parse_args()
 
 
@@ -43,7 +44,6 @@ def main():
 
     data_dir = args.data_dir or data_cfg.get("data_dir", "data")
     file_glob = args.file_glob or data_cfg.get("file_glob", "*.npz")
-
     epochs = args.epochs if args.epochs is not None else int(train_cfg.get("epochs", 100))
     batch_size = args.batch_size if args.batch_size is not None else int(train_cfg.get("batch_size", 8))
     learning_rate = (
@@ -59,21 +59,21 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # run = wandb.init(
-    #     entity="tonyho-stony-brook-university",
-    #     project="Physics-informed Graph neural net",
-    #     config={
-    #         "learning_rate": learning_rate,
-    #         "batch_size": batch_size,
-    #         "hidden_dim": model_cfg.hidden_dim,
-    #         "architecture": "EncodeDecodeGNNGeneral",
-    #         "dataset": "LSDyna",
-    #         "epochs": epochs,
-    #         "timestamp": timestamp,
-    #         "config_path": args.config,
-    #     },
-    # )
-    run = None
+    run = wandb.init(
+        entity="tonyho-stony-brook-university",
+        project="Physics-informed Graph neural net",
+        config={
+            "learning_rate": learning_rate,
+            "batch_size": batch_size,
+            "hidden_dim": model_cfg.hidden_dim,
+            "architecture": "EncoderDecodeGNNForceForce",
+            "dataset": "LSDyna",
+            "epochs": epochs,
+            "timestamp": timestamp,
+            "config_path": args.config,
+            "dt_noise": args.dt_noise,
+        },
+    )
 
     data_path = os.path.join(root, data_dir)
     npz_files = sorted(glob(os.path.join(data_path, file_glob)))
@@ -97,12 +97,7 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
-    ref_graph = dataset[0]
-    node_dim = ref_graph.x.shape[1]
-    out_dim = ref_graph.y.shape[1]
-    edge_dim = ref_graph.edge_attr.shape[1] if ref_graph.edge_attr is not None else 1
-
-    model = create_gnn_model(model_cfg, node_dim, edge_dim, out_dim).to(device)
+    model = create_gnn_force_model(model_cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     num_params = sum(p.numel() for p in model.parameters())
@@ -113,20 +108,18 @@ def main():
     log_dir = os.path.join(root, "train_log")
     os.makedirs(model_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, f"log_{timestamp}.txt")
-    model_path = os.path.join(model_dir, f"gnn_general_{timestamp}.pt")
+    log_path = os.path.join(log_dir, f"log_force_{timestamp}.txt")
+    model_path = os.path.join(model_dir, f"gnn_force_{timestamp}.pt")
 
     model.train()
     for epoch in range(epochs):
         total_loss = 0.0
         for batch_graphs in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch"):
             batch_graphs = batch_graphs.to(device)
-            # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
-            batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
+            batch_graphs.delta_t = batch_graphs.delta_t + args.dt_noise * torch.randn_like(batch_graphs.delta_t)
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
-            y_predict = model(batch_graphs)
-            batch_loss = model.loss(y_predict, batch_graphs.y)
+            _, batch_loss = model(batch_graphs)
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -140,20 +133,15 @@ def main():
         with torch.no_grad():
             for batch_graphs in valid_loader:
                 batch_graphs = batch_graphs.to(device)
-                # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
                 batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
-                y_predict = model(batch_graphs)
-                val_loss += model.loss(y_predict, batch_graphs.y).item()
+                _, batch_loss = model(batch_graphs)
+                val_loss += batch_loss.item()
 
         avg_val_loss = val_loss / max(len(valid_loader), 1)
         model.train()
-        
-        # Log to wandb
+
         print(f"Epoch {epoch+1}/{epochs} - loss: {avg_loss:.6f} - val: {avg_val_loss:.6f}")
-        if run is not None:
-            run.log({"train_loss": avg_loss, "val_loss": avg_val_loss})
-        
-        # Log loss to file
+        run.log({"train_loss": avg_loss, "val_loss": avg_val_loss})
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"{avg_loss}\n")
 
@@ -162,8 +150,7 @@ def main():
             print(f"Saved model to {model_path}")
 
     print(f"Saved loss history to {log_path}")
-    if run is not None:
-        run.finish()
+    run.finish()
 
 
 if __name__ == "__main__":
