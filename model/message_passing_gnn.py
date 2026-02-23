@@ -75,7 +75,7 @@ class GraphNetBlock(MessagePassing):
         super().__init__(aggr='add')
 
         # egde update net: eij' = f1(xi, xj, eij)
-        self.edge_net = MLP([edge_feat_dim + 2*node_feat_dim, 
+        self.edge_net = MLP([edge_feat_dim + 2*node_feat_dim +4, 
                              hidden_dim, 
                              hidden_dim], )
 
@@ -84,27 +84,30 @@ class GraphNetBlock(MessagePassing):
                              hidden_dim,
                              hidden_dim])
 
-    def forward(self, x, edge_index, edge_feat):
+    def forward(self, x, pos, edge_index, edge_feat):
         # ---- SAFE NO-EDGE CASE ----
         if edge_index.numel() == 0:
-            return x, edge_feat    # No neighbors → no message passing
+            return x, edge_feat    # No neigh+9-bors → no message passing
         
         # Redidual node update
-        re_node_feat = self.propagate(edge_index, x=x, edge_attr=edge_feat)
+        re_node_feat = self.propagate(edge_index, x=x, pos=pos, edge_attr=edge_feat)
         
         # Redidual edge update 
                 # Edge update
-        row, col = edge_index
-        re_edge_features = self.edge_net(torch.cat([x[row], x[col], edge_feat], dim=-1))
+        # row, col = edge_index
+        # re_edge_features = self.edge_net(torch.cat([x[row], x[col], edge_feat], dim=-1))
         
         # Update
         x = x + re_node_feat
-        edge_feat = edge_feat + re_edge_features
+        # edge_feat = edge_feat + re_edge_features
 
         return x, edge_feat
 
-    def message(self, x_i, x_j, edge_attr):            
-        msg = torch.cat([x_i, x_j, edge_attr], dim=-1)
+    def message(self, x_i, x_j, pos_i, pos_j, edge_attr):
+        r = pos_i - pos_j                                         # (E,3)
+        d = torch.norm(r, dim=-1, keepdim=True)                   # (E,1)
+        r_hat = r / (d + 1e-8)                                    # (E,3)
+        msg = torch.cat([x_i, x_j, r_hat, d, edge_attr], dim=-1)
         return self.edge_net(msg) 
 
     def update(self, aggr_out, x):
@@ -112,33 +115,87 @@ class GraphNetBlock(MessagePassing):
         tmp = torch.cat([aggr_out, x], dim=-1) 
         return self.node_net(tmp)
     
+# class GraphNetSurfaceBlock(MessagePassing):
+#     def __init__(self, hidden_dim: int, threshold = 22):
+#         super().__init__(aggr='add')
+
+#         self.threshold = threshold
+#         self.hidden_dim = hidden_dim
+
+#         # edge message: m_ij = f([dx, dy, dz, ||d||]) -> (E, H)
+#         self.edge_net = MLP([4, hidden_dim, hidden_dim])
+
+#         # node update: embeded_contact_force = g([sum_j m_ij, pos_i]) -> (N, H)
+#         # self.node_net = MLP([hidden_dim + 3, hidden_dim, hidden_dim])
+#         self.node_net = MLP([hidden_dim, hidden_dim, hidden_dim])
+
+#     def forward(self, pos, edge_index):
+#         # pos: (N, 3), edge_index: (2, E)
+#         if edge_index is None or edge_index.numel() == 0:
+#             return pos
+#         return self.propagate(edge_index, pos=pos)
+
+#     def message(self, pos_i, pos_j):
+#         r = pos_i - pos_j                          # (E, 3)
+#         d = torch.norm(r, dim=-1, keepdim=True)    # (E, 1)
+#         # breakpoint()
+#         if d > self.threshold:
+#             return torch.zeros((pos_i.shape[0], self.hidden_dim))
+
+#         r_hat = r/(d + 1e-8)  # (E, 3)
+#         msg = torch.cat([r_hat, d], dim=-1)            # (E, 4)
+#         return self.edge_net(msg)                     # (E, H)
+
+#     def update(self, aggr_out, pos):
+#         # aggr_out: (N, H)
+#         # tmp = torch.cat([aggr_out], dim=-1)      # (N, H+3)
+#         # node_force_en = self.node_net(tmp)            # (N, H)
+#         # return node_force_en                          # embedded contact force
+#         return self.node_net(aggr_out)
+
 class GraphNetSurfaceBlock(MessagePassing):
-    def __init__(self, hidden_dim: int):
-        super().__init__(aggr='add')
+    def __init__(self, hidden_dim: int, threshold=22.0):
+        super().__init__(aggr='mean')
+        self.threshold = float(threshold)
+        self.hidden_dim = hidden_dim
 
-        # edge message: m_ij = f([dx, dy, dz, ||d||]) -> (E, H)
-        self.edge_net = MLP([4, hidden_dim, hidden_dim])
+        self.edge_net = MLP([8, hidden_dim, hidden_dim])
+        self.node_net = MLP([hidden_dim*2, hidden_dim, hidden_dim])
 
-        # node update: embeded_contact_force = g([sum_j m_ij, pos_i]) -> (N, H)
-        self.node_net = MLP([hidden_dim + 3, hidden_dim, hidden_dim])
-
-    def forward(self, pos, edge_index):
-        # pos: (N, 3), edge_index: (2, E)
+    def forward(self, x, pos, vel, edge_index):
+        # pos: (N,3), edge_index: (2,E)
         if edge_index is None or edge_index.numel() == 0:
-            return pos
-        return self.propagate(edge_index, pos=pos)
+            return pos.new_zeros(pos.size(0), self.hidden_dim)  # (N,H)
 
-    def message(self, pos_i, pos_j):
-        dist = pos_i - pos_j                          # (E, 3)
-        r = torch.norm(dist, dim=-1, keepdim=True)    # (E, 1)
-        msg = torch.cat([dist, r], dim=-1)            # (E, 4)
-        return self.edge_net(msg)                     # (E, H)
+        # compute distances for all edges
+        src, dst = edge_index[0], edge_index[1]
+        r = pos[src] - pos[dst]                                   # (E,3)
+        d = torch.norm(r, dim=-1)                                 # (E,)
 
-    def update(self, aggr_out, pos):
-        # aggr_out: (N, H)
-        tmp = torch.cat([aggr_out, pos], dim=-1)      # (N, H+3)
-        node_force_en = self.node_net(tmp)            # (N, H)
-        return node_force_en                          # embedded contact force
+        keep = d <= self.threshold                                # (E,)
+        edge_index_select = edge_index[:, keep]                          # (2,E_keep)
+
+        if edge_index_select.numel() == 0:
+            return pos.new_zeros(pos.size(0), self.hidden_dim)     # (N,H)
+
+        return self.propagate(edge_index_select, x=x, pos=pos, v= vel)
+
+    def message(self, x_i, x_j, pos_i, pos_j, v_i, v_j):
+        r = pos_i - pos_j                                         # (E,3)
+        d = torch.norm(r, dim=-1, keepdim=True)                   # (E,1)
+        r_hat = r / (d + 1e-8)                                    # (E,3)
+        v_rel = v_i - v_j            # (E, 3)
+        v_rel_n = (v_rel * r_hat).sum(-1, keepdim=True)  # (E, 1)
+        # msg = torch.cat([r_hat, d], dim=-1)                       # (E,4)
+        msg = torch.cat([r_hat,d,v_rel,v_rel_n], dim=-1)
+        return self.edge_net(msg)                                 # (E,H)
+
+    def update(self, aggr_out, x):
+        # breakpoint()
+        tmp = torch.cat([aggr_out, x], dim=-1)
+        x = self.node_net(tmp) + x
+        return x                            # (N,H)
+
     
 class GraphNetSurfaceBlockForce(MessagePassing):
     def __init__(self, hidden_dim: int):

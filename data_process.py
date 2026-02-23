@@ -35,12 +35,16 @@ def build_edges_gnn_from_mesh(mesh):
             n1 = int(node_ids[i]) - 1  # zero-based
             n2 = int(node_ids[j]) - 1  # zero-based
 
-            # add both directions
-            edges_list.append((n1, n2))
-            attr_list.append(mat)
+            # add n1 -> n2 if target n2 is free
+            # Allow: SPC->normal, normal->normal
+            if n2 not in SPC_NODES:
+                edges_list.append((n1, n2))
+                attr_list.append(MATERIAL_PROPERTIES[mat])
 
-            edges_list.append((n2, n1))
-            attr_list.append(mat)
+            # add n2 -> n1 if target n1 is free
+            if n1 not in SPC_NODES:
+                edges_list.append((n2, n1))
+                attr_list.append(MATERIAL_PROPERTIES[mat])
 
     if not edges_list:
         return np.zeros((0, 2), dtype=int), np.zeros((0,), dtype=np.asarray(mesh.materials.array).dtype)
@@ -52,11 +56,7 @@ def build_edges_gnn_from_mesh(mesh):
     # unique rows with indices of first occurrence
     _, unique_idx = np.unique(edges_gnn, axis=0, return_index=True)
     unique_idx = np.sort(unique_idx)  # keep a stable order
-
-    edges_gnn = edges_gnn[unique_idx]
-    edges_attr = edges_attr[unique_idx]
-
-    return edges_gnn, edges_attr
+    return edges_gnn[unique_idx], edges_attr[unique_idx]
 
 
 def build_geometry_data(data_folder: str):
@@ -99,8 +99,9 @@ def build_geometry_data(data_folder: str):
     edge_distance = np.linalg.norm(
         coords0[edges_gnn[:, 0]] - coords0[edges_gnn[:, 1]],
         axis=1,
-    )
-    edges_attr = np.stack([edges_attr.astype(float), edge_distance.astype(float)], axis=1)
+    ).reshape(-1, 1)
+
+    edges_attr = np.hstack([edges_attr.astype(float), edge_distance.astype(float)])
 
     # Convert element and node IDs to zero-based indexing
     element_to_nodes_zero = {
@@ -124,12 +125,19 @@ def build_geometry_data(data_folder: str):
     for i in plate_surf_nodes:
         for j in ball_surf_nodes:
             edge_surf_index.append((i,j))
-            edge_surf_index.append((j,i))
+            if i not in SPC_NODES:
+                edge_surf_index.append((j,i))
     edge_surf_index = np.asarray(edge_surf_index, dtype=int) #(S, 2)
+
+    # Fixed boundary nodes with zero-based indexing
+    boundary_nodes = np.zeros(node_mass_data_gnn.shape[0], dtype=np.float32) # (N,)
+    spc_ = [ind for ind in SPC_NODES]
+    boundary_nodes[spc_] = 1 # Zerobased index
     
     return {
         "initial_coords": coords0,
         "node_mass": node_mass_data_gnn,
+        "boundary_constraint": boundary_nodes,
         "element_id_solids": np.array(list(solids.keys())),
         "element_id_shells": np.array(list(shells.keys())),
         "element_to_nodes_solids": np.array(list(solids.values())),
@@ -232,7 +240,7 @@ if __name__ == "__main__":
     ]
 
     # Save geometry information
-    geometry_path = "geometry_shared.npz"
+    geometry_path = os.path.join(root, "data", "geometry_shared.npz")
     geometry_data = build_geometry_data(data_folders[0])
     np.savez_compressed(geometry_path, **geometry_data)
     print(f"Geometry data saved to: {geometry_path}")

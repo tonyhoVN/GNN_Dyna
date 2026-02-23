@@ -5,6 +5,7 @@ import os
 from ansys.dpf.post import load_simulation
 from ansys.dpf import core as dpf
 from utils.ansys_utils import run_cfile_ls_prepost
+from math import log1p
 
 _MASS_LINE_RE = re.compile(
     r"Mass of (?:Solid|Shell|Beam) Ele #(?P<id>\d+)\s*=\s*"
@@ -33,9 +34,13 @@ REAL_EDGES = {
 }
 
 MATERIAL_PROPERTIES = {
-    0: [207, 0.3, 0, 0, 1, 0], # Rigid mat [E, nu, 0, 0, 1, 0]
-    1: [207, 0.3, 0.2, 2, 0, 1] # Elastic mat [E, nu, sigma_y, E_t, 0, 1]
+    0: [log1p(207), log1p(0.3), log1p(0.2), log1p(2), 1, 0], # Elastic mat [E, nu, sigma_y, E_t, 1, 0]
+    1: [log1p(207), log1p(0.3), 0, 0, 0, 1], # Rigid mat [E, nu, 0, 0, 0, 1]
 }
+
+spc_nodes = [34,35,51,52,68,69,85,86,102,103,119,120,136,137,153,154,
+            170,171,187,188,204,205,221,222,238,239,255,256] + list(range(1,19)) + list(range(272,290)) # 1-based index
+SPC_NODES = {nid - 1 for nid in spc_nodes} # 0-base index
 
 def read_element_masses(msg_path: Union[str, Path]) -> List[Tuple[int, float]]:
     """

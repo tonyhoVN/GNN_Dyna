@@ -3,16 +3,16 @@ import json
 import os
 from datetime import datetime
 from glob import glob
-
 import torch
-import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, random_split
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
-
+from model.model_buckling1 import EncodeProcessDecode
 from utils.data_loader import FEMDataset
 from model.model_creation import ModelConfig, create_gnn_model
 import wandb
+import random
+
 
 
 def parse_args():
@@ -42,6 +42,7 @@ def load_raw_config(path: str):
 
 def main():
     args = parse_args()
+    root = os.getcwd()
     raw = load_raw_config(args.config)
 
     data_cfg = raw.get("data", {})
@@ -62,11 +63,10 @@ def main():
     if args.hidden_dim is not None:
         model_cfg.hidden_dim = args.hidden_dim
 
-    root = os.getcwd()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    #### Start wandb
+    ## Start wandb
     run = None
     if args.log_wandb:
         run = wandb.init(
@@ -76,7 +76,7 @@ def main():
                 "learning_rate": learning_rate,
                 "batch_size": batch_size,
                 "hidden_dim": model_cfg.hidden_dim,
-                "architecture": "EncodeDecodeGNNGeneral",
+                "architecture": "BaseLine Residual GNN",
                 "dataset": "LSDyna",
                 "epochs": epochs,
                 "timestamp": timestamp,
@@ -84,11 +84,15 @@ def main():
             },
         )
 
-    #### Load dataset
+    ## Load dataset
     data_path = os.path.join(root, data_dir)
     npz_files = sorted(glob(os.path.join(data_path, file_glob)))
     if not npz_files:
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
+
+    # load 50%
+    k = len(npz_files) // 2
+    npz_files = random.sample(npz_files, k)
 
     datasets = [FEMDataset(path) for path in npz_files]
     dataset = ConcatDataset(datasets)
@@ -107,15 +111,24 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
-    #### Create training model
-    model = create_gnn_model(model_cfg).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    loss = torch.nn.MSELoss()
+    ## Create training model
+    # breakpoint()
+    model = EncodeProcessDecode(
+        node_feat_size = model_cfg.node_encoder["feat_dim"],
+        output_size = model_cfg.decoder["out_dim"],
+        latent_size = model_cfg.hidden_dim,
+        edge_feat_size = model_cfg.edge_encoder["feat_dim"],
+        message_passing_steps = model_cfg.gnn_topology["n_gnn_layers"]
+    ).to(device)
+
     num_params = sum(p.numel() for p in model.parameters())
     num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {num_params} (trainable: {num_trainable})")
+    # optimizer and loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    loss = torch.nn.MSELoss()
 
-    #### Log files and save model
+    ## Make log file
     model_dir = os.path.join(root, "save_model")
     log_dir = os.path.join(root, "train_log")
     os.makedirs(model_dir, exist_ok=True)
@@ -123,7 +136,7 @@ def main():
     log_path = os.path.join(log_dir, f"log_{timestamp}.txt")
     model_path = os.path.join(model_dir, f"gnn_general_{timestamp}.pt")
 
-    #### Start training loop
+    ## Training loop
     model.train()
     for epoch in range(epochs):
         total_loss = 0.0
@@ -133,8 +146,8 @@ def main():
 
             # Add random noise for batch data
             batch_graphs.x = batch_graphs.x + 0.01 * torch.randn_like(batch_graphs.x)
-            batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
-            batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
+            # batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
+            # batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
             y_predict = model(batch_graphs)
             batch_loss = loss(y_predict, batch_graphs.y)

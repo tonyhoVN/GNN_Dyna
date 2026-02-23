@@ -110,23 +110,26 @@ class TemporalEncoder(nn.Module):
             layer_norm = False,
             use_mass = True,
             use_pos = True,
+            use_boundary = True
             ):
         super().__init__()
 
+        lstm_dim = hidden_dim
         self.lstm = nn.LSTM(
             input_size=in_dim,
-            hidden_size=hidden_dim,
+            hidden_size=lstm_dim,
             num_layers=n_layers,
             batch_first=True
         )
 
         self.use_mass = use_mass
         self.use_pos = use_pos
-        extra_dim = (1 if use_mass else 0) + (3 if use_pos else 0)
+        self.use_boundary = use_boundary
+        extra_dim = (1 if use_boundary else 0) + (1 if use_mass else 0) + (3 if use_pos else 0)
 
-        self.fc = MLP([hidden_dim + extra_dim, hidden_dim, hidden_dim], layer_norm)  # +1 for mass feature
+        self.fc = MLP([lstm_dim + extra_dim, hidden_dim, hidden_dim], layer_norm)  # +1 for mass feature
                                                                  # +3 for position feature
-    def forward(self, x, mass, pos):
+    def forward(self, x, mass, pos, boundary):
         """
         x: node info (N, F * T)
         mass: node mass (N,)
@@ -143,6 +146,8 @@ class TemporalEncoder(nn.Module):
             extras.append(mass.unsqueeze(-1))
         if self.use_pos:
             extras.append(pos)
+        if self.use_boundary:
+            extras.append(boundary.unsqueeze(-1))
         h = torch.cat([h, *extras], dim=-1)  # (N, H+1+3)
 
         # h = torch.cat([h, pos, mass.unsqueeze(-1)], dim=-1)  # (N, H+1+3)
@@ -395,7 +400,8 @@ class EncodeDecodeGNNGeneral(nn.Module):
                  edge_encorder, 
                  gnn_topo, 
                  gnn_surface,
-                 node_decoder
+                 node_decoder,
+                 msg_passing_steps = 5
     ):
         super().__init__()
         self.node_encoder = node_encoder
@@ -403,16 +409,28 @@ class EncodeDecodeGNNGeneral(nn.Module):
         self.layers_topo  = gnn_topo
         self.layers_surf  = gnn_surface
         self.node_decoder = node_decoder
+        self.msg_passing_steps = msg_passing_steps
 
     def forward(self, graph):
         # 1. Extract feature at time step t
         x_t = graph.x[:,:,-1] # (N, H)
 
         # 2. Encode node time series feature
-        h_topo = self.node_encoder(graph.x, graph.node_mass, graph.x_initial)    # (N, H)
+        h_topo = self.node_encoder(
+            graph.x,
+            graph.node_mass, 
+            graph.x_initial,
+            graph.boundary_constraint, 
+        )    # (N, H)
 
         # 3. Encode edge feature
         edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+        # breakpoint()
+
+        # 4. Message passing with neighbor nodes for internal force
+        # for i in range(self.msg_passing_steps):
+        for layer_topo in self.layers_topo:
+            h_topo, edge_feat = layer_topo(h_topo, graph.pos, graph.edge_index, edge_feat) # (N, H)
 
         # 5. Message passing with surface nodes for contact force
         if self.layers_surf is None:
@@ -423,25 +441,26 @@ class EncodeDecodeGNNGeneral(nn.Module):
         #     else:
         #         h_surf = self.layers_surf[0](graph.pos, graph.edge_surf_index)
         else:
-            h_surf = self.layers_surf(graph.pos, graph.edge_surf_index) # (N, H)
+            h_final = self.layers_surf(h_topo, graph.pos, x_t[:,3:6], graph.edge_surf_index) # (N, H)
 
         # 6. Combine node features 
-        surface_mask = torch.zeros(h_surf.size(0), device=h_surf.device, dtype=h_surf.dtype)
-        surface_mask.index_fill_(0, graph.edge_surf_index.view(-1), 1.0)
-        h_final = h_topo + h_surf * surface_mask.unsqueeze(-1) # (N, H)
+        # surface_mask = torch.zeros(h_surf.size(0), device=h_surf.device, dtype=h_surf.dtype)
+        # surface_mask.index_fill_(0, graph.edge_surf_index.view(-1), 1.0)
+        # h_final = h_topo + h_surf * surface_mask.unsqueeze(-1) # (N, H)
 
-        # 4. Message passing with neighbor nodes for internal force
-        for layer in self.layers_topo:
-            h_final, edge_feat = layer(h_final, graph.edge_index, edge_feat) # (N, H)
-
+        # Base update
+        dt  = graph.delta_t.unsqueeze(-1) 
+        y_t = self.base_update(a_t=x_t[:,0:3], v_t=x_t[:,3:6], u_t=x_t[:,6:9], dt=dt)
         # 7. Decode and output predict
         delta_pred = self.node_decoder(h_final)  # (N, out_dim)
-        y_t = x_t + delta_pred * graph.delta_t.unsqueeze(-1) 
+        y_t = y_t + delta_pred * dt
 
         return y_t
-    
-    def loss(self, pred, target):
-        return F.mse_loss(pred, target)
+
+    def base_update(self, v_t, a_t, u_t, dt):
+        v_t1 = v_t + a_t * dt
+        u_t1 = u_t + v_t * dt + 0.5 * a_t * (dt**2)
+        return torch.cat([a_t, v_t1, u_t1], dim=-1) # (N, 6)
     
 class EncoderDecodeGNNForce(EncodeDecodeGNNGeneral):
     def __init__(self, 
@@ -532,7 +551,91 @@ class EncoderDecodeGNNForce(EncodeDecodeGNNGeneral):
         L_state = self.loss(y_t, Y_t)
         return L_acc + L_state
 
+class EncoderDecodeGNNRedidual(EncodeDecodeGNNGeneral):
+    def __init__(self, 
+                 node_encoder, 
+                 edge_encorder, 
+                 gnn_topo,
+                 head_topo, 
+                 gnn_surface,
+                 head_surface,
+                 node_decoder
+    ):
+        super().__init__(node_encoder, 
+                 edge_encorder, 
+                 gnn_topo, 
+                 gnn_surface,
+                 node_decoder)
+
+    def forward(self, graph):
+        # 1. Extract feature at time step t
+        X_t = graph.x[:,:,-1] # (N, 9)
+        a_t = X_t[:, 0:3] # (N, 3) acc
+        v_t = X_t[:, 3:6] # (N, 3) vel
+        u_t = X_t[:, 6:9] # (N, 3) disp
+        x_t = torch.cat([u_t, v_t, graph.x_initial, graph.node_mass.unsqueeze(-1)], dim=-1) # (N, 9)  
+
+        # 2. Encode node feature
+        h_node = self.node_encoder(x_t)    # (N, H)
+        h_surf = h_node.clone()
+        h_topo = h_node.clone()
+
+        # 3. Encode edge feature
+        edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+
+        # 4. Message passing with neighbor nodes for internal force
+        for layer in self.layers_topo:
+            h_topo, edge_feat = layer(h_topo, graph.edge_index, edge_feat) # (N, H)
         
+        force_int = self.head_topo(h_topo) # (N, 3)
+
+        # 5. Message passing with surface nodes for contact force
+        if self.layers_surf is None:
+            h_surf = torch.zeros_like(h_surf)
+        else:
+            # TODO: select feature for surf
+            h_surf = self.layers_surf(x_t, graph.edge_surf_index) # (N, H)
+
+        force_ext = self.head_surface(h_surf) # (N, 3)
+
+        # 6. Combine node features 
+        surface_mask = torch.zeros(force_int.size(0), device=force_int.device, dtype=force_int.dtype)
+        surface_mask.index_fill_(0, graph.edge_surf_index.view(-1), 1.0)
+        force_total = force_int + force_ext * surface_mask.unsqueeze(-1) # (N, 3)
+
+        # 7. Predict acceleration
+        # a_t_pred = force_total / (graph.node_mass.unsqueeze(-1) * 1000) #scale to gram
+        a_t_pred = force_total
+        # Prepare for decode 
+        x_for_dec = graph.x.clone()
+        x_for_dec[:,0:3,-1] = a_t_pred.detach()
+
+
+        # 8. Baseline update  
+        dt = graph.delta_t.unsqueeze(-1)  # (N,1)
+        y_base = self.base_update(u_t, v_t, a_t_pred, dt)
+
+        # 7. Decode residual with time series
+        y_t = self.update(x_for_dec, y_base, dt)
+
+        # Loss
+        loss = self.loss_total(y_t, graph.y[:,3:], a_t_pred, a_t)
+        return y_t, loss
+    
+    def base_update(self, u_t, v_t, a_t, dt):
+        v_t1 = v_t + a_t * dt
+        u_t1 = u_t + v_t * dt + 0.5 * a_t * (dt**2)
+        return torch.cat([v_t1, u_t1], dim=-1) # (N, 6)
+
+    def update(self, x, y_base, dt):
+        delta_y_rate = self.node_decoder(x, dt)
+        y_final = y_base + delta_y_rate * dt
+        return y_final
+    
+    def loss_total(self, y_t, Y_t, a_t_pred, a_t):
+        L_acc = self.loss(a_t_pred, a_t)
+        L_state = self.loss(y_t, Y_t)
+        return L_acc + L_state     
 
 class PhysicsNet(nn.Module):
     """

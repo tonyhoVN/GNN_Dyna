@@ -155,7 +155,7 @@ def process_gnn_data(data_folder: str, geometry_path: str):
     delta_T = []
     total_kinetic_energy = []
     total_internal_energy = []
-    num_series = 3
+    num_series = 5
 
 
     # Get node features

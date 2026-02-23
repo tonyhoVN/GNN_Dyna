@@ -50,35 +50,40 @@ class ModelConfig:
 
 def create_gnn_model(
     config: ModelConfig,
-    node_feat_dim: int,
-    edge_feat_dim: int,
-    out_dim: int,
 ) -> EncodeDecodeGNNGeneral:
     hidden_dim = config.hidden_dim
+
+    # num_materials = int(config.edge_encoder.get("num_materials", 2))
+    # mat_emb_dim = int(config.edge_encoder.get("mat_emb_dim", 4))
+
+    # Node encoder
+    node_feat_dim = int(config.node_encoder.get("feat_dim", 2))
     lstm_layers = int(config.node_encoder.get("lstm_layers", 3))
     use_mass = bool(config.node_encoder.get("use_mass", True))
     use_pos = bool(config.node_encoder.get("use_pos", True))
-    num_materials = int(config.edge_encoder.get("num_materials", 2))
-    mat_emb_dim = int(config.edge_encoder.get("mat_emb_dim", 4))
-
-    # Node encoder
     node_encoder = TemporalEncoder(
         in_dim=node_feat_dim,
         hidden_dim=hidden_dim,
         n_layers=lstm_layers,
         use_mass=use_mass,
         use_pos=use_pos,
-        layer_norm=bool(config.node_encoder.get("layer_norm", True))
+        layer_norm=bool(config.node_encoder.get("layer_norm", False))
     )
 
     # Edge encoder (material id embedding + numeric features)
+    edge_feat_dim = int(config.edge_encoder.get("feat_dim", 2))
     numeric_dim = max(edge_feat_dim - 1, 0)
-    edge_encoder = EdgeEncoder(
-        num_materials=num_materials,
-        mat_emb_dim=mat_emb_dim,
-        numeric_dim=numeric_dim,
-        out_dim=hidden_dim,
-        layer_norm=bool(config.edge_encoder.get("layer_norm", True))
+    # edge_encoder = EdgeEncoder(
+    #     num_materials=num_materials,
+    #     mat_emb_dim=mat_emb_dim,
+    #     numeric_dim=numeric_dim,
+    #     out_dim=hidden_dim,
+    #     layer_norm=bool(config.edge_encoder.get("layer_norm", True))
+    # )
+    edge_en_layer = [edge_feat_dim, hidden_dim, hidden_dim]
+    edge_encoder = MLP(
+        edge_en_layer, 
+        layer_norm=bool(config.edge_encoder.get("layer_norm", False))
     )
 
     # Topo message-passing layers
@@ -93,6 +98,11 @@ def create_gnn_model(
             for _ in range(n_topo_layers)
         ]
     )
+    # layers_topo = GraphNetBlock(
+    #             edge_feat_dim=hidden_dim,
+    #             node_feat_dim=hidden_dim,
+    #             hidden_dim=hidden_dim,
+    #         )
 
     # Surface message-passing layer (single block)
     surface_enabled = bool(config.gnn_surface.get("enabled", True))
@@ -103,6 +113,7 @@ def create_gnn_model(
         layers_surface = None
 
     # Node decoder
+    out_dim = int(config.decoder.get("out_dim", 9))
     node_decoder_layers = [hidden_dim, hidden_dim, out_dim]
     node_decoder = MLP(node_decoder_layers, 
                        layer_norm=bool(config.mlp.get("layer_norm", False)))
@@ -113,6 +124,7 @@ def create_gnn_model(
         layers_topo,
         layers_surface,
         node_decoder,
+        msg_passing_steps=n_topo_layers
     )
 
 def create_gnn_force_model(
@@ -172,7 +184,7 @@ def create_gnn_force_model(
     decoder_layers = int(config.decoder.get("n_layers", 2))
     decoder_out_dim = int(config.decoder.get("out_dim", 6))
     decoder_in_dim = int(config.decoder.get("in_dim", 9))
-    
+
     node_decoder = GRUResidualDecoder(
         in_dim=decoder_in_dim,
         hidden_dim=decoder_hidden,

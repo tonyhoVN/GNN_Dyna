@@ -25,13 +25,19 @@ Generate data manual
 
 Generate data automate 
 ----------------
-`python create_dataset.py --num_runs 2`
+`python -m create_dataset --num-runs 10`
 
 4. Post-process and save dataset for training
    `python -m data_process`
 
+
+Training 
+----------------
 5. Load data and train
    `python train_force.py --config config/contact_gnn_force.json`
+
+For standard baseline residual gnn
+   `python train_baseline.py --config config/gnn_contact_general.json`
 
 Test
 ------

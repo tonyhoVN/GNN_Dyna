@@ -21,6 +21,7 @@ class GraphData(Data):
         x_initial: torch.Tensor,     # (N, 3)
         pos: torch.Tensor,
         node_mass: Optional[torch.Tensor] = None,     # (N,)
+        boundary_constraint: Optional[torch.Tensor] = None,     # (N,)
         delta_t: Optional[torch.Tensor] = None,       # scalar
         edge_attr: Optional[torch.Tensor] = None,     # (E, D)
         edge_surf_index: Optional[torch.Tensor] = None,
@@ -38,6 +39,7 @@ class GraphData(Data):
             x_initial=x_initial,
             pos=pos,
             node_mass=node_mass,
+            boundary_constraint=boundary_constraint,
             delta_t=delta_t,
             edge_surf_index=edge_surf_index,
             element_node_ids=element_node_ids,
@@ -99,6 +101,9 @@ class FEMDataset(Dataset):
 
         # Node mass 
         self.node_mass = torch.as_tensor(geometry_data["node_mass"], dtype=torch.float)   # (N, )
+
+        # Boundary constraint
+        self.boundary_constraint = torch.as_tensor(geometry_data["boundary_constraint"], dtype=torch.float) 
 
         # Load edge connectivity and attributes for GNN
         edge_index = torch.as_tensor(geometry_data["edge_index"], dtype=torch.long)
@@ -169,6 +174,7 @@ class FEMDataset(Dataset):
         total_kinetic_energy = None
         if self.total_kinetic_energy is not None:
             total_kinetic_energy = torch.as_tensor(self.total_kinetic_energy[idx], dtype=torch.float) # (2, )
+        
         return GraphData(
             x=current_state,
             y=predict_feature,
@@ -176,6 +182,7 @@ class FEMDataset(Dataset):
             pos=node_pos,
             delta_t=delta_t,
             node_mass=self.node_mass,
+            boundary_constraint=self.boundary_constraint,
             edge_index=self.edge_index,
             edge_attr=self.edge_attr,
             edge_surf_index=self.edge_surf_index,

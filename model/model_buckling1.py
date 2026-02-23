@@ -112,7 +112,7 @@ class EncodeProcessDecode(torch.nn.Module):
         edge_index = graph.edge_index                       
         # x = graph.node_features
         # edge = graph.edge_features
-        x = graph.x
+        x = graph.x[:,:,-1]
         edge = graph.edge_attr
         
         # Encoding node features
