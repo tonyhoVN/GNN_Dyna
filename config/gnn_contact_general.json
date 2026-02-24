@@ -1,7 +1,8 @@
 {
   "data": {
     "data_dir": "data",
-    "file_glob": "*data.npz"
+    "file_glob": "*data.npz",
+    "percent": 50
   },
   "split": {
     "train": 0.75,
@@ -15,7 +16,7 @@
       "feat_dim": 9,
       "lstm_layers": 1,
       "use_mass": true,
-      "use_pos": true,
+      "use_pos": false,
       "layer_norm": true
     },
     "edge_encoder": {

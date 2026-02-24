@@ -94,7 +94,8 @@ def main():
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
 
     # load 50%
-    k = int(len(npz_files)*0.5)
+    percent = float(data_cfg.get("percent", 100))
+    k = int(len(npz_files)*(percent/100.0))
     npz_files = random.sample(npz_files, k)
 
     datasets = [FEMDataset(path) for path in npz_files]
