@@ -35,11 +35,11 @@ class GraphNetBlock(MessagePassing):
                                    ReLU(),
                                    LayerNorm(self._latent_size))       
         
-    def forward(self, graph):
+    def forward(self, x, edge_index, edge_attr):
         
-        edge_index = graph.edge_index        
-        x = graph.x
-        edge_features = graph.edge_attr
+        # edge_index = graph.edge_index        
+        # x = graph.x
+        edge_features = edge_attr
         
         # Node update
         new_node_features = self.propagate(edge_index, x= x, edge_attr = edge_features)        
@@ -49,10 +49,10 @@ class GraphNetBlock(MessagePassing):
         new_edge_features = self.edge_net(torch.cat([x[row], x[col], edge_features], dim=-1))
         
         # Add residuals
-        new_node_features = new_node_features + graph.x
-        new_edge_features = new_edge_features + graph.edge_attr       
+        new_node_features = new_node_features + x
+        new_edge_features = new_edge_features + edge_attr       
                 
-        return Data(edge_index = edge_index, x = new_node_features, edge_attr = new_edge_features)        
+        return (new_node_features, new_edge_features)        
     
     def message(self, x_i, x_j, edge_attr):            
         features = torch.cat([x_i, x_j, edge_attr], dim=-1)        
@@ -122,15 +122,16 @@ class EncodeProcessDecode(torch.nn.Module):
         edge_latents = self.edge_encode_net(edge)        
        
         # latent_graph = Graph(edge_index, node_latents, edge_latents)
-        latent_graph = Data(edge_index = edge_index, x = node_latents, edge_attr = edge_latents)                
+        # latent_graph = Data(edge_index = edge_index, x = node_latents, edge_attr = edge_latents)                
         
         for _ in range(self._message_passing_steps):
              # latent_graph = GraphNetBlock(self._latent_size, self._latent_size*3, self._latent_size*2)(latent_graph)
-             latent_graph = self.message_pass(latent_graph)
+            #  latent_graph = self.message_pass(latent_graph)
+            node_latents, edge_latents = self.message_pass(node_latents, edge_index, edge_latents)
         
         """Decodes node features from graph."""   
         # Decoding node features
-        decoded_nodes = self.node_decode_net(latent_graph.x)    
+        decoded_nodes = self.node_decode_net(node_latents)    
         
         return decoded_nodes
   
