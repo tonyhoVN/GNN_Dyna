@@ -9,7 +9,7 @@
     "test": 0.1
   },
   "model": {
-    "type": "integration",
+    "type": "base_line_residual_gnn",
     "hidden_dim": 256,
     "node_encoder": {
       "feat_dim": 9,

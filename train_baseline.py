@@ -13,7 +13,10 @@ from model.model_creation import ModelConfig, create_gnn_model
 import wandb
 import random
 
-
+seed = 42
+random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train GNN from JSON config")
@@ -91,7 +94,7 @@ def main():
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
 
     # load 50%
-    k = len(npz_files) // 2
+    k = int(len(npz_files)*0.5)
     npz_files = random.sample(npz_files, k)
 
     datasets = [FEMDataset(path) for path in npz_files]

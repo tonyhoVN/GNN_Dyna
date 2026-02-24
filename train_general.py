@@ -13,7 +13,12 @@ from tqdm import tqdm
 from utils.data_loader import FEMDataset
 from model.model_creation import ModelConfig, create_gnn_model
 import wandb
+import random
 
+seed = 42
+random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train GNN from JSON config")
@@ -76,7 +81,7 @@ def main():
                 "learning_rate": learning_rate,
                 "batch_size": batch_size,
                 "hidden_dim": model_cfg.hidden_dim,
-                "architecture": "EncodeDecodeGNNGeneral",
+                "architecture": model_cfg.type,
                 "dataset": "LSDyna",
                 "epochs": epochs,
                 "timestamp": timestamp,
@@ -90,6 +95,9 @@ def main():
     if not npz_files:
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
 
+    k = int(len(npz_files)*0.5)
+    npz_files = random.sample(npz_files, k)
+
     datasets = [FEMDataset(path) for path in npz_files]
     dataset = ConcatDataset(datasets)
     total_samples = len(dataset)
@@ -101,7 +109,7 @@ def main():
     train_dataset, valid_dataset, _ = random_split(
         dataset,
         [train_size, valid_size, test_size],
-        generator=torch.Generator().manual_seed(42),
+        generator=torch.Generator().manual_seed(seed),
     )
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -133,7 +141,7 @@ def main():
 
             # Add random noise for batch data
             batch_graphs.x = batch_graphs.x + 0.01 * torch.randn_like(batch_graphs.x)
-            batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
+            # batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
             y_predict = model(batch_graphs)

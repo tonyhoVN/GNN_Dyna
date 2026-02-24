@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from torch_geometric.nn import MessagePassing
-import torch.nn.functional as F
 
 # =============================================
 # Simple MLP
@@ -19,8 +18,8 @@ def MLP(channels, layer_norm = False):
     layers = []
     for i in range(len(channels)-1):
         layers.append(nn.Linear(channels[i], channels[i+1]))
-        if i < len(channels)-2:
-            layers.append(nn.GELU())
+        # if i < len(channels)-2:
+        layers.append(nn.ReLU())
     if layer_norm: 
         layers.append(nn.LayerNorm(channels[-1]))
     return nn.Sequential(*layers)
@@ -75,22 +74,22 @@ class GraphNetBlock(MessagePassing):
         super().__init__(aggr='add')
 
         # egde update net: eij' = f1(xi, xj, eij)
-        self.edge_net = MLP([edge_feat_dim + 2*node_feat_dim +4, 
+        self.edge_net = MLP([edge_feat_dim + 2*node_feat_dim + 8, 
                              hidden_dim, 
-                             hidden_dim], )
+                             hidden_dim], layer_norm)
 
         # redidual node update net: xi' = xi + f2(xi, sum(eij')) 
         self.node_net = MLP([hidden_dim + node_feat_dim, 
                              hidden_dim,
-                             hidden_dim])
+                             hidden_dim], layer_norm)
 
-    def forward(self, x, pos, edge_index, edge_feat):
+    def forward(self, x, pos0, pos, edge_index, edge_feat):
         # ---- SAFE NO-EDGE CASE ----
         if edge_index.numel() == 0:
             return x, edge_feat    # No neigh+9-bors → no message passing
         
         # Redidual node update
-        re_node_feat = self.propagate(edge_index, x=x, pos=pos, edge_attr=edge_feat)
+        re_node_feat = self.propagate(edge_index, x=x, pos0=pos0, pos=pos, edge_attr=edge_feat)
         
         # Redidual edge update 
                 # Edge update
@@ -103,11 +102,19 @@ class GraphNetBlock(MessagePassing):
 
         return x, edge_feat
 
-    def message(self, x_i, x_j, pos_i, pos_j, edge_attr):
+    def message(self, x_i, x_j, pos0_i, pos0_j, pos_i, pos_j, edge_attr):
+        # Current edge feature
         r = pos_i - pos_j                                         # (E,3)
         d = torch.norm(r, dim=-1, keepdim=True)                   # (E,1)
         r_hat = r / (d + 1e-8)                                    # (E,3)
-        msg = torch.cat([x_i, x_j, r_hat, d, edge_attr], dim=-1)
+        # Rest edge feature
+        r0 = pos0_i - pos0_j
+        d0 = torch.norm(r0, dim=-1, keepdim=True)
+        r0_hat = r0 / d0
+
+        # stretch = d / d0  # (E,1)
+
+        msg = torch.cat([x_i, x_j, r0_hat, d0, r_hat, d, edge_attr], dim=-1)
         return self.edge_net(msg) 
 
     def update(self, aggr_out, x):
@@ -154,18 +161,18 @@ class GraphNetBlock(MessagePassing):
 #         return self.node_net(aggr_out)
 
 class GraphNetSurfaceBlock(MessagePassing):
-    def __init__(self, hidden_dim: int, threshold=22.0):
-        super().__init__(aggr='mean')
+    def __init__(self, hidden_dim: int, threshold=22.0, layer_norm=False):
+        super().__init__(aggr='add')
         self.threshold = float(threshold)
         self.hidden_dim = hidden_dim
 
-        self.edge_net = MLP([8, hidden_dim, hidden_dim])
-        self.node_net = MLP([hidden_dim*2, hidden_dim, hidden_dim])
+        self.edge_net = MLP([8, hidden_dim, hidden_dim], layer_norm)
+        self.node_net = MLP([hidden_dim*2, hidden_dim, hidden_dim], layer_norm)
 
     def forward(self, x, pos, vel, edge_index):
         # pos: (N,3), edge_index: (2,E)
         if edge_index is None or edge_index.numel() == 0:
-            return pos.new_zeros(pos.size(0), self.hidden_dim)  # (N,H)
+            return x  # (N,H)
 
         # compute distances for all edges
         src, dst = edge_index[0], edge_index[1]
@@ -176,11 +183,11 @@ class GraphNetSurfaceBlock(MessagePassing):
         edge_index_select = edge_index[:, keep]                          # (2,E_keep)
 
         if edge_index_select.numel() == 0:
-            return pos.new_zeros(pos.size(0), self.hidden_dim)     # (N,H)
+            return x     # (N,H)
 
         return self.propagate(edge_index_select, x=x, pos=pos, v= vel)
 
-    def message(self, x_i, x_j, pos_i, pos_j, v_i, v_j):
+    def message(self, pos_i, pos_j, v_i, v_j):
         r = pos_i - pos_j                                         # (E,3)
         d = torch.norm(r, dim=-1, keepdim=True)                   # (E,1)
         r_hat = r / (d + 1e-8)                                    # (E,3)
@@ -188,7 +195,13 @@ class GraphNetSurfaceBlock(MessagePassing):
         v_rel_n = (v_rel * r_hat).sum(-1, keepdim=True)  # (E, 1)
         # msg = torch.cat([r_hat, d], dim=-1)                       # (E,4)
         msg = torch.cat([r_hat,d,v_rel,v_rel_n], dim=-1)
-        return self.edge_net(msg)                                 # (E,H)
+
+        # gating (prevents ghost contact)
+        gate_d = torch.exp(-(d / self.threshold) ** 2)                         # (E,1)
+        gate_v = torch.sigmoid(-v_rel_n)           # (E,1)  approaching => stronger
+        gate = gate_d * gate_v
+
+        return self.edge_net(msg) * gate                                 # (E,H)
 
     def update(self, aggr_out, x):
         # breakpoint()

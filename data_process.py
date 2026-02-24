@@ -2,9 +2,20 @@ import os
 import numpy as np
 from ansys.dpf import post
 from ansys.dpf import core as dpf
-
+import argparse
 from utils.ansys_utils import run_cfile_ls_prepost
 from utils.ls_prepost_utils import *
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train GNN from JSON config")
+    parser.add_argument(
+        "--skip-time", 
+        dest="skip_time", 
+        action="store_true", 
+        help="Skip building temporal data"
+    )
+    parser.set_defaults(skip_time=False)
+    return parser.parse_args()
 
 # Build edges for GNN
 def build_edges_gnn_from_mesh(mesh):
@@ -231,6 +242,7 @@ if __name__ == "__main__":
     # Load server
     root = os.getcwd()
     server = dpf.start_local_server(ansys_path=r"C:\Program Files\ANSYS Inc\v242", as_global=True)
+    args = parse_args()
     
     # Process all data folders in output/
     data_folders = [
@@ -246,6 +258,7 @@ if __name__ == "__main__":
     print(f"Geometry data saved to: {geometry_path}")
 
     # Save time series information
-    for folder in data_folders:
-        print(f"Processing folder: {folder}")
-        process_gnn_data(folder, geometry_path)
+    if not args.skip_time:
+        for folder in data_folders:
+            print(f"Processing time series of folder: {folder}")
+            process_gnn_data(folder, geometry_path)

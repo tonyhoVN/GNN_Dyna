@@ -6,6 +6,7 @@ from model.GNN import (
     TemporalEncoder,
     EncodeDecodeGNNGeneral,
     EncoderDecodeGNNForce,
+    EncodeDecodeGNNIntegration,
     EdgeEncoder,
     GRUResidualDecoder,
 )
@@ -20,6 +21,7 @@ from torch import nn
 
 @dataclass
 class ModelConfig:
+    type: str
     hidden_dim: int
     node_encoder: Dict[str, Any]
     edge_encoder: Dict[str, Any]
@@ -36,6 +38,7 @@ class ModelConfig:
             raw = json.load(f)
         model_cfg = raw.get("model", raw)
         return ModelConfig(
+            type=model_cfg.get("type", "general"),
             hidden_dim=int(model_cfg.get("hidden_dim", 64)),
             node_encoder=model_cfg.get("node_encoder", {}),
             edge_encoder=model_cfg.get("edge_encoder", {}),
@@ -88,44 +91,73 @@ def create_gnn_model(
 
     # Topo message-passing layers
     n_topo_layers = int(config.gnn_topology.get("n_gnn_layers", 5))
-    layers_topo = nn.ModuleList(
-        [
-            GraphNetBlock(
-                edge_feat_dim=hidden_dim,
-                node_feat_dim=hidden_dim,
-                hidden_dim=hidden_dim,
-            )
-            for _ in range(n_topo_layers)
-        ]
-    )
-    # layers_topo = GraphNetBlock(
-    #             edge_feat_dim=hidden_dim,
-    #             node_feat_dim=hidden_dim,
-    #             hidden_dim=hidden_dim,
-    #         )
+    shared_layers = bool(config.gnn_topology.get("shared_layers", False)) 
+
+    if not shared_layers:
+        layers_topo = nn.ModuleList(
+            [
+                GraphNetBlock(
+                    edge_feat_dim=hidden_dim,
+                    node_feat_dim=hidden_dim,
+                    hidden_dim=hidden_dim,
+                    layer_norm=bool(config.gnn_topology.get("layer_norm", False))
+                )
+                for _ in range(n_topo_layers)
+            ]
+        )
+    else:
+        layers_topo = nn.ModuleList(
+            [   
+                GraphNetBlock(
+                    edge_feat_dim=hidden_dim,
+                    node_feat_dim=hidden_dim,
+                    hidden_dim=hidden_dim,
+                    layer_norm=bool(config.gnn_topology.get("layer_norm", False))
+                )
+            ]
+        )
 
     # Surface message-passing layer (single block)
     surface_enabled = bool(config.gnn_surface.get("enabled", True))
     layers_surface: Optional[nn.Module]
+    distance_threshold = float(config.gnn_surface.get("distance_threshold", 20.0))
     if surface_enabled:
-        layers_surface = GraphNetSurfaceBlock(hidden_dim=hidden_dim)
+        layers_surface = GraphNetSurfaceBlock(
+            hidden_dim=hidden_dim,
+            threshold=distance_threshold,
+            layer_norm=bool(config.gnn_surface.get("layer_norm", False))    
+        )
     else:
         layers_surface = None
 
     # Node decoder
     out_dim = int(config.decoder.get("out_dim", 9))
-    node_decoder_layers = [hidden_dim, hidden_dim, out_dim]
-    node_decoder = MLP(node_decoder_layers, 
-                       layer_norm=bool(config.mlp.get("layer_norm", False)))
+    node_decoder_layers = [hidden_dim + 1, hidden_dim, out_dim] # +1 dim for delta_t input
+    node_decoder = MLP(node_decoder_layers)
 
-    return EncodeDecodeGNNGeneral(
-        node_encoder,
-        edge_encoder,
-        layers_topo,
-        layers_surface,
-        node_decoder,
-        msg_passing_steps=n_topo_layers
-    )
+    # Create model 
+    if config.type == "general":
+        return EncodeDecodeGNNGeneral(
+            node_encoder,
+            edge_encoder,
+            layers_topo,
+            layers_surface,
+            node_decoder,
+            msg_passing_steps=n_topo_layers
+        )
+    elif config.type == "integration":
+        return EncodeDecodeGNNIntegration(
+            node_encoder,
+            edge_encoder,
+            layers_topo,
+            layers_surface,
+            node_decoder,
+            msg_passing_steps=n_topo_layers,
+            standard_dt=0.01
+        )
+    else: 
+        return None
+
 
 def create_gnn_force_model(
     config: ModelConfig,
