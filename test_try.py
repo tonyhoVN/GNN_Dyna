@@ -92,8 +92,8 @@ if __name__ == "__main__":
     model_config = ModelConfig.from_json(config_path)
     model = create_gnn_model(model_config)
     print(model)
-    
-    for i in range(5):
-        print(random.randint(0,10))
+    num_params = sum(p.numel() for p in model.parameters())
+    num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model parameters: {num_params} (trainable: {num_trainable})")
 
     pass

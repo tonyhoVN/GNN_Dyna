@@ -7,6 +7,7 @@ from model.GNN import (
     EncodeDecodeGNNGeneral,
     EncoderDecodeGNNForce,
     EncodeDecodeGNNIntegration,
+    EncodeDecodeGNNDirect,
     EdgeEncoder,
     GRUResidualDecoder,
 )
@@ -62,7 +63,7 @@ def create_gnn_model(
     # Node encoder
     node_feat_dim = int(config.node_encoder.get("feat_dim", 2))
     lstm_layers = int(config.node_encoder.get("lstm_layers", 3))
-    use_mass = bool(config.node_encoder.get("use_mass", True))
+    use_mass = bool(config.node_encoder.get("use_mass", False))
     use_pos = bool(config.node_encoder.get("use_pos", True))
     node_encoder = TemporalEncoder(
         in_dim=node_feat_dim,
@@ -133,7 +134,10 @@ def create_gnn_model(
     # Node decoder
     out_dim = int(config.decoder.get("out_dim", 9))
     node_decoder_layers = [hidden_dim + 1, hidden_dim, out_dim] # +1 dim for delta_t input
-    node_decoder = MLP(node_decoder_layers)
+    # node_decoder = MLP(node_decoder_layers)
+    node_decoder = nn.Sequential(nn.Linear(hidden_dim + 1, hidden_dim),
+                        nn.ReLU(),
+                        nn.Linear(hidden_dim, out_dim))
 
     # Create model 
     if config.type == "general":
@@ -147,6 +151,16 @@ def create_gnn_model(
         )
     elif config.type == "integration":
         return EncodeDecodeGNNIntegration(
+            node_encoder,
+            edge_encoder,
+            layers_topo,
+            layers_surface,
+            node_decoder,
+            msg_passing_steps=n_topo_layers,
+            standard_dt=0.01
+        )
+    elif config.type == "direct":
+        return EncodeDecodeGNNDirect(
             node_encoder,
             edge_encoder,
             layers_topo,

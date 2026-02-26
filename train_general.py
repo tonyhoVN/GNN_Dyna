@@ -95,7 +95,8 @@ def main():
     if not npz_files:
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
 
-    k = int(len(npz_files)*0.5)
+    percent = float(data_cfg.get("percent", 100))
+    k = int(len(npz_files)*(percent/100.0))
     npz_files = random.sample(npz_files, k)
 
     datasets = [FEMDataset(path) for path in npz_files]
@@ -117,7 +118,8 @@ def main():
 
     #### Create training model
     model = create_gnn_model(model_cfg).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
     loss = torch.nn.MSELoss()
     num_params = sum(p.numel() for p in model.parameters())
     num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -132,20 +134,21 @@ def main():
     model_path = os.path.join(model_dir, f"gnn_general_{timestamp}.pt")
 
     #### Start training loop
-    model.train()
+    # model.train()
     for epoch in range(epochs):
+        model.train()
         total_loss = 0.0
         for batch_graphs in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch"):
             batch_graphs = batch_graphs.to(device)
             # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
 
             # Add random noise for batch data
-            batch_graphs.x = batch_graphs.x + 0.01 * torch.randn_like(batch_graphs.x)
+            # batch_graphs.x = batch_graphs.x + 0.01 * torch.randn_like(batch_graphs.x)
             # batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
             y_predict = model(batch_graphs)
-            batch_loss = loss(y_predict, batch_graphs.y)
+            batch_loss = loss(y_predict, batch_graphs.y[:, 3:])  # only compute loss on velocity and displacement
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -162,10 +165,12 @@ def main():
                 # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
                 batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
                 y_predict = model(batch_graphs)
-                val_loss += loss(y_predict, batch_graphs.y).item()
+                val_loss += loss(y_predict, batch_graphs.y[:, 3:]).item()
 
         avg_val_loss = val_loss / max(len(valid_loader), 1)
-        model.train()
+
+        # Update scheduler
+        scheduler.step(avg_val_loss)
         
         # Log to wandb
         print(f"Epoch {epoch+1}/{epochs} - loss: {avg_loss:.6f} - val: {avg_val_loss:.6f}")

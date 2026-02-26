@@ -149,12 +149,12 @@ def main():
             # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
 
             # Add random noise for batch data
-            batch_graphs.x = batch_graphs.x + 0.01 * torch.randn_like(batch_graphs.x)
+            # batch_graphs.x = batch_graphs.x + 0.01 * torch.randn_like(batch_graphs.x)
             # batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
             # batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
             y_predict = model(batch_graphs)
-            batch_loss = loss(y_predict, batch_graphs.y)
+            batch_loss = loss(y_predict, batch_graphs.y[:, 3:]) # only predict position, not velocity
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -171,7 +171,7 @@ def main():
                 # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
                 batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
                 y_predict = model(batch_graphs)
-                val_loss += loss(y_predict, batch_graphs.y).item()
+                val_loss += loss(y_predict, batch_graphs.y[:, 3:]).item()
 
         avg_val_loss = val_loss / max(len(valid_loader), 1)
         model.train()
