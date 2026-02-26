@@ -1,7 +1,8 @@
 {
   "data": {
     "data_dir": "data",
-    "file_glob": "*data.npz"
+    "file_glob": "*data.npz",
+    "percent": 70
   },
   "split": {
     "train": 0.75,
@@ -9,13 +10,13 @@
     "test": 0.1
   },
   "model": {
-    "type": "base_line_residual_gnn",
-    "hidden_dim": 256,
+    "type": "baseline",
+    "hidden_dim": 128,
     "node_encoder": {
       "feat_dim": 6,
       "lstm_layers": 1,
       "use_mass": true,
-      "use_pos": true,
+      "use_pos": false,
       "layer_norm": true
     },
     "edge_encoder": {
@@ -23,7 +24,7 @@
       "layer_norm": true
     },
     "gnn_topology": {
-      "n_gnn_layers": 5,
+      "n_gnn_layers": 4,
       "shared_layers": true, 
       "layer_norm": true
     },

@@ -20,7 +20,7 @@ torch.cuda.manual_seed_all(seed)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train GNN from JSON config")
-    parser.add_argument("--config", type=str, default="config/gnn_contact_general.json", help="Path to config JSON")
+    parser.add_argument("--config", type=str, default="config/base_line.json", help="Path to config JSON")
     parser.add_argument("--epochs", type=int, default=None, help="Override epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     parser.add_argument("--learning-rate", type=float, default=None, help="Override learning rate")
