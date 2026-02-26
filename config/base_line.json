@@ -23,7 +23,7 @@
       "layer_norm": true
     },
     "gnn_topology": {
-      "n_gnn_layers": 4,
+      "n_gnn_layers": 5,
       "shared_layers": true, 
       "layer_norm": true
     },

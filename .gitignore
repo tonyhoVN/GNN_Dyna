@@ -31,6 +31,8 @@ images/
 .idea/
 .vscode/
 
+*.zip
+
 wandb/
 
 *.bib

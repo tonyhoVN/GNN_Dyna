@@ -198,10 +198,10 @@ class GraphNetSurfaceBlock(MessagePassing):
 
         # gating (prevents ghost contact)
         gate_d = torch.exp(-(d / (self.threshold/3.0)) ** 2)                         # (E,1)
-        gate_v = torch.sigmoid(-v_rel_n)           # (E,1)  approaching => stronger
-        gate = gate_d * gate_v
+        # gate_v = torch.sigmoid(-v_rel_n)           # (E,1)  approaching => stronger
+        # gate = gate_d * gate_v
 
-        return self.edge_net(msg) * gate                                 # (E,H)
+        return self.edge_net(msg) * gate_d                                 # (E,H)
 
     def update(self, aggr_out, x):
         # breakpoint()

@@ -33,9 +33,14 @@ REAL_EDGES = {
     ]
 }
 
+# MATERIAL_PROPERTIES = {
+#     0: [log1p(207), log1p(0.3), log1p(0.2), log1p(2), 1, 0], # Plastic mat [E, nu, sigma_y, E_t, 1, 0]
+#     1: [log1p(207), log1p(0.3), 0, 0, 0, 1], # Rigid mat [E, nu, 0, 0, 0, 1]
+# }
+
 MATERIAL_PROPERTIES = {
-    0: [log1p(207), log1p(0.3), log1p(0.2), log1p(2), 1, 0], # Plastic mat [E, nu, sigma_y, E_t, 1, 0]
-    1: [log1p(207), log1p(0.3), 0, 0, 0, 1], # Rigid mat [E, nu, 0, 0, 0, 1]
+    0: [207, 0.3, 0.2, 2, 1, 0], # Plastic mat [E, nu, sigma_y, E_t, 1, 0]
+    1: [207, 0.3, 0, 0, 0, 1], # Rigid mat [E, nu, 0, 0, 0, 1]
 }
 
 spc_nodes = [34,35,51,52,68,69,85,86,102,103,119,120,136,137,153,154,

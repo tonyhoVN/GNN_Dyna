@@ -130,6 +130,11 @@ def main():
     print(f"Model parameters: {num_params} (trainable: {num_trainable})")
     # optimizer and loss
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=100, 
+        eta_min=1e-5
+    )
     loss = torch.nn.MSELoss()
 
     ## Make log file
@@ -176,6 +181,7 @@ def main():
         avg_val_loss = val_loss / max(len(valid_loader), 1)
         model.train()
         
+        scheduler.step() # for CosineAnnealingLR
         # Log to wandb
         print(f"Epoch {epoch+1}/{epochs} - loss: {avg_loss:.6f} - val: {avg_val_loss:.6f}")
         if run is not None:

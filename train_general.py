@@ -119,7 +119,11 @@ def main():
     #### Create training model
     model = create_gnn_model(model_cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=100, 
+        eta_min=1e-5
+    )
     loss = torch.nn.MSELoss()
     num_params = sum(p.numel() for p in model.parameters())
     num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -152,6 +156,8 @@ def main():
 
             optimizer.zero_grad()
             batch_loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # gradient clipping to prevent explosion
             optimizer.step()
             total_loss += batch_loss.item()
 
@@ -170,7 +176,7 @@ def main():
         avg_val_loss = val_loss / max(len(valid_loader), 1)
 
         # Update scheduler
-        scheduler.step(avg_val_loss)
+        scheduler.step()
         
         # Log to wandb
         print(f"Epoch {epoch+1}/{epochs} - loss: {avg_loss:.6f} - val: {avg_val_loss:.6f}")
