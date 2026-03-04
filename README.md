@@ -63,4 +63,6 @@ Notes
 
 ### TODO ###
 - Remesh plate
-- Change to predict series data
+- Plot error graph in rollout test
+- Change data structure and training to predict weighted rollout prediction
+- Benchmark baseline GNN with simple edge feature
