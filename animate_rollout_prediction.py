@@ -2,6 +2,7 @@ import argparse
 import os
 import time
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 import torch
@@ -83,7 +84,10 @@ def _build_rollout(model, dataset, start_index, rollout_steps, device):
 
             # Ground truth position at next step
             gt_graph = dataset[sample_idx]
-            gt_disp = gt_graph.y[:, 6:9]
+            gt_y = gt_graph.y
+            if gt_y.dim() == 3:
+                gt_y = gt_y[:, 0, :]  # first future step
+            gt_disp = gt_y[:, 6:9]
             gt_pos_next = x_initial.detach().cpu() + gt_disp
             gt_positions.append(gt_pos_next.numpy())
 
@@ -97,6 +101,22 @@ def _build_rollout(model, dataset, start_index, rollout_steps, device):
             x_hist = torch.cat([x_hist[:, :, 1:], next_state.unsqueeze(-1)], dim=2)
 
     return np.asarray(gt_positions), np.asarray(pred_positions), x_initial.detach().cpu().numpy()
+
+
+def _plot_rollout_mae(gt_positions, pred_positions, output_png_path):
+    mae_per_step = np.mean(np.linalg.norm(pred_positions - gt_positions, axis=2), axis=1)
+    steps = np.arange(len(mae_per_step))
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(steps, mae_per_step, marker="o")
+    plt.xlabel("Rollout step")
+    plt.ylabel("MAE (position norm)")
+    plt.title("Rollout Error Over Time")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_png_path, dpi=150)
+    plt.close()
+    print(f"Saved rollout MAE plot to: {output_png_path}")
 
 
 def _animate_mesh(gt_positions, pred_positions, x_initial, base_grid, interval_ms, warp_scale, output_mp4_path):
@@ -177,10 +197,6 @@ def _animate_mesh(gt_positions, pred_positions, x_initial, base_grid, interval_m
             gt_grid.Modified()
             pred_grid.Modified()
 
-        plotter.subplot(0, 0)
-        plotter.add_text(f"Ground Truth (step={f})", name="title_gt", font_size=12)
-        plotter.subplot(0, 1)
-        plotter.add_text(f"Prediction (step={f})", name="title_pr", font_size=12)
         plotter.render()
         plotter.write_frame()
         plotter.update()
@@ -245,6 +261,8 @@ def main():
         warp_scale=args.warp_scale,
         output_mp4_path=output_mp4_path,
     )
+    mae_plot_path = os.path.join(results_dir, "rollout_prediction_mae.png")
+    _plot_rollout_mae(gt_positions, pred_positions, mae_plot_path)
 
 
 if __name__ == "__main__":

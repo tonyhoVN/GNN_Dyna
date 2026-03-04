@@ -46,13 +46,7 @@ Test
 
 Rollout Animation Test
 ------
-python animate_rollout_prediction.py ^
-  --config config\gnn_contact_direct_no_acc.json ^
-  --model-path save_model\gnn_general_20260226_224550.pt ^
-  --npz-path data\20260219_165551_time_data.npz ^
-  --start-index 10 ^
-  --rollout-steps 50 ^
-  --warp-scale 1.0
+python animate_rollout_prediction.py  --config config\gnn_contact_direct_no_acc.json --model-path save_model\gnn_general_20260303_120856.pt --npz-path data\20260302_133424_time_data.npz --interval-ms 200 --start-index 20 --rollout-steps 50
 
 
 Notes
@@ -63,6 +57,4 @@ Notes
 
 ### TODO ###
 - Remesh plate
-- Plot error graph in rollout test
-- Change data structure and training to predict weighted rollout prediction
 - Benchmark baseline GNN with simple edge feature

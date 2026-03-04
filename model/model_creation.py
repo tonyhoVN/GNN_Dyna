@@ -8,6 +8,7 @@ from model.GNN import (
     EncoderDecodeGNNForce,
     EncodeDecodeGNNIntegration,
     EncodeDecodeGNNDirect,
+    EncodeDecodeGNNDirectRecurrent,
     EdgeEncoder,
     GRUResidualDecoder,
 )
@@ -168,6 +169,21 @@ def create_gnn_model(
             node_decoder,
             msg_passing_steps=n_topo_layers,
             standard_dt=0.01
+        )
+    elif config.type == "direct_recurrent":
+        one_step_model = EncodeDecodeGNNDirect(
+            node_encoder,
+            edge_encoder,
+            layers_topo,
+            layers_surface,
+            node_decoder,
+            msg_passing_steps=n_topo_layers,
+            standard_dt=0.01,
+        )
+        horizon = int(config.decoder.get("horizon", 5))
+        return EncodeDecodeGNNDirectRecurrent(
+            one_step_model=one_step_model,
+            horizon=horizon,
         )
     else: 
         return None

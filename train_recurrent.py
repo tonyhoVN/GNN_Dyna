@@ -1,40 +1,34 @@
 import argparse
 import json
 import os
+import random
 from datetime import datetime
 from glob import glob
+
 import torch
 from torch.utils.data import ConcatDataset, random_split
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
-from model.model_buckling1 import EncodeProcessDecode
-from utils.data_loader import FEMDataset
+
 from model.model_creation import ModelConfig, create_gnn_model
-import wandb
-import random
+from utils.data_loader import FEMDataset
+
 
 seed = 42
 random.seed(seed)
 torch.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train GNN from JSON config")
-    parser.add_argument("--config", type=str, default="config/base_line.json", help="Path to config JSON")
+    parser = argparse.ArgumentParser(description="Train recurrent GNN from JSON config")
+    parser.add_argument("--config", type=str, default="config/gnn_contact_direct_recurrent.json", help="Path to config JSON")
     parser.add_argument("--epochs", type=int, default=None, help="Override epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     parser.add_argument("--learning-rate", type=float, default=None, help="Override learning rate")
-    parser.add_argument("--hidden-dim", type=int, default=None, help="Override hidden dim")
     parser.add_argument("--save-every", type=int, default=None, help="Override save-every")
     parser.add_argument("--data-dir", type=str, default=None, help="Override data dir")
     parser.add_argument("--file-glob", type=str, default=None, help="Override file glob")
-    parser.add_argument(
-        "--log-wandb", 
-        dest="log_wandb", 
-        action="store_true", 
-        help="Disable logging to Weights & Biases"
-    )
-    parser.set_defaults(log_wandb=False)
     return parser.parse_args()
 
 
@@ -43,9 +37,17 @@ def load_raw_config(path: str):
         return json.load(f)
 
 
+def weighted_sequence_mse(pred_seq, target_seq):
+    # pred_seq, target_seq: (N, H, C)
+    horizon = pred_seq.shape[1]
+    weights = torch.arange(horizon, 0, -1, device=pred_seq.device, dtype=pred_seq.dtype)
+    weights = weights / weights.sum()
+    per_h = ((pred_seq - target_seq) ** 2).mean(dim=(0, 2))  # (H,)
+    return (per_h * weights).sum()
+
+
 def main():
     args = parse_args()
-    root = os.getcwd()
     raw = load_raw_config(args.config)
 
     data_cfg = raw.get("data", {})
@@ -63,39 +65,17 @@ def main():
     save_every = args.save_every if args.save_every is not None else int(train_cfg.get("save_every", 10))
 
     model_cfg = ModelConfig.from_json(args.config)
-    if args.hidden_dim is not None:
-        model_cfg.hidden_dim = args.hidden_dim
-
+    root = os.getcwd()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ## Start wandb
-    run = None
-    if args.log_wandb:
-        run = wandb.init(
-            entity="tonyho-stony-brook-university",
-            project="Physics-informed Graph neural net",
-            config={
-                "learning_rate": learning_rate,
-                "batch_size": batch_size,
-                "hidden_dim": model_cfg.hidden_dim,
-                "architecture": "BaseLine Residual GNN",
-                "dataset": "LSDyna",
-                "epochs": epochs,
-                "timestamp": timestamp,
-                "config_path": args.config,
-            },
-        )
-
-    ## Load dataset
     data_path = os.path.join(root, data_dir)
     npz_files = sorted(glob(os.path.join(data_path, file_glob)))
     if not npz_files:
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
 
-    # load 50%
     percent = float(data_cfg.get("percent", 100))
-    k = int(len(npz_files)*(percent/100.0))
+    k = max(1, int(len(npz_files) * (percent / 100.0)))
     npz_files = random.sample(npz_files, k)
 
     datasets = [FEMDataset(path) for path in npz_files]
@@ -109,100 +89,78 @@ def main():
     train_dataset, valid_dataset, _ = random_split(
         dataset,
         [train_size, valid_size, test_size],
-        generator=torch.Generator().manual_seed(42),
+        generator=torch.Generator().manual_seed(seed),
     )
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
-    ## Create training model
-    # breakpoint()
-    model = EncodeProcessDecode(
-        node_feat_size = model_cfg.node_encoder["feat_dim"],
-        output_size = model_cfg.decoder["out_dim"],
-        latent_size = model_cfg.hidden_dim,
-        edge_feat_size = model_cfg.edge_encoder["feat_dim"],
-        message_passing_steps = model_cfg.gnn_topology["n_gnn_layers"]
-    ).to(device)
+    model = create_gnn_model(model_cfg).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-5)
+    one_step_mse = torch.nn.MSELoss()
 
     num_params = sum(p.numel() for p in model.parameters())
     num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {num_params} (trainable: {num_trainable})")
-    # optimizer and loss
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, 
-        T_max=100, 
-        eta_min=1e-5
-    )
-    loss = torch.nn.MSELoss()
 
-    ## Make log file
     model_dir = os.path.join(root, "save_model")
     log_dir = os.path.join(root, "train_log")
     os.makedirs(model_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, f"log_{timestamp}.txt")
-    model_path = os.path.join(model_dir, f"gnn_baseline_{timestamp}.pt")
+    log_path = os.path.join(log_dir, f"log_recurrent_{timestamp}.txt")
+    model_path = os.path.join(model_dir, f"gnn_recurrent_{timestamp}.pt")
 
-    ## Training loop
+    best_val_loss = float("inf")
     for epoch in range(epochs):
-        total_loss = 0.0
         model.train()
+        total_loss = 0.0
         for batch_graphs in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch"):
             batch_graphs = batch_graphs.to(device)
-            # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
+            batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
-            # Add random noise for batch data
-            # batch_graphs.x = batch_graphs.x + 0.01 * torch.randn_like(batch_graphs.x)
-            # batch_graphs.delta_t = batch_graphs.delta_t + 0.002 * torch.randn_like(batch_graphs.delta_t)
-            # batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
-
-            y_predict = model(batch_graphs)
+            pred_seq = model(batch_graphs)  # (N_total, H, 6)
             y_target = batch_graphs.y
-            if y_target.dim() == 3:
-                y_target = batch_graphs.y[:,0, :] # first future step
-            batch_loss = loss(y_predict, y_target[:, 3:]) # only predict position, not velocity
+            if y_target.dim() == 2:
+                y_target = y_target.unsqueeze(1)  # (N, 1, F)
+            target_seq = y_target[:, :pred_seq.shape[1], 3:]  # (N, H, 6)
+
+            batch_loss = weighted_sequence_mse(pred_seq, target_seq)
 
             optimizer.zero_grad()
             batch_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             total_loss += batch_loss.item()
 
         avg_loss = total_loss / max(len(train_loader), 1)
 
+        # Validation: one-step only (first predicted step)
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
             for batch_graphs in valid_loader:
                 batch_graphs = batch_graphs.to(device)
-                # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
-                # batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
-                y_predict = model(batch_graphs)
+                batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
+                pred_seq = model(batch_graphs)
                 y_target = batch_graphs.y
                 if y_target.dim() == 3:
-                    y_target = batch_graphs.y[:,0, :] # first future step
-                val_loss += loss(y_predict, y_target[:, 3:]).item()
+                    y_target = y_target[:, 0, :]
+                val_loss += one_step_mse(pred_seq[:, 0, :], y_target[:, 3:]).item()
 
         avg_val_loss = val_loss / max(len(valid_loader), 1)
-        
-        scheduler.step() # for CosineAnnealingLR
-        # Log to wandb
-        print(f"Epoch {epoch+1}/{epochs} - loss: {avg_loss:.6f} - val: {avg_val_loss:.6f}")
-        if run is not None:
-            run.log({"train_loss": avg_loss, "val_loss": avg_val_loss})
-        
-        # Log loss to file
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"{avg_loss}\n")
+        scheduler.step()
 
-        if (epoch + 1) % save_every == 0:
+        print(f"Epoch {epoch+1}/{epochs} - loss: {avg_loss:.6f} - val(one-step): {avg_val_loss:.6f}")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"{avg_loss}\t{avg_val_loss}\n")
+
+        if (epoch + 1) % save_every == 0 and avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
             torch.save(model.state_dict(), model_path)
-            print(f"Saved model to {model_path}")
+            print(f"Saved model to {model_path} with val loss {best_val_loss:.6f}")
 
     print(f"Saved loss history to {log_path}")
-    if run is not None:
-        run.finish()
 
 
 if __name__ == "__main__":

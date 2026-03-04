@@ -1,7 +1,7 @@
 {
   "data": {
     "data_dir": "data",
-    "file_glob": "*data.npz",
+    "file_glob": "*time_data.npz",
     "percent": 50
   },
   "split": {
@@ -10,7 +10,7 @@
     "test": 0.1
   },
   "model": {
-    "type": "baseline",
+    "type": "direct_recurrent",
     "hidden_dim": 64,
     "node_encoder": {
       "feat_dim": 6,
@@ -25,16 +25,17 @@
     },
     "gnn_topology": {
       "n_gnn_layers": 10,
-      "shared_layers": true, 
+      "shared_layers": true,
       "layer_norm": false
     },
     "gnn_surface": {
       "enabled": true,
       "distance_threshold": 22.0,
-      "layer_norm": true
+      "layer_norm": false
     },
     "decoder": {
-      "out_dim": 6
+      "out_dim": 6,
+      "horizon": 5
     }
   },
   "training": {

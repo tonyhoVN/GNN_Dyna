@@ -686,6 +686,41 @@ class EncodeDecodeGNNDirect(EncodeDecodeGNNGeneral):
 
         return delta_pred
 
+
+class EncodeDecodeGNNDirectRecurrent(nn.Module):
+    """
+    Recurrent multi-step predictor built from EncodeDecodeGNNDirect-style one-step updates.
+    Output is a timeseries of next states [v, u] with shape (N, horizon, 6).
+    """
+
+    def __init__(self, one_step_model: EncodeDecodeGNNDirect, horizon: int = 5):
+        super().__init__()
+        self.one_step_model = one_step_model
+        self.horizon = horizon
+
+    def forward(self, graph: GraphData):
+        # Keep a local rolling history so caller graph is not mutated.
+        x_hist = graph.x.clone()  # (N, F, T)
+        preds = []
+
+        for _ in range(self.horizon):
+            graph_step = graph.clone()
+            graph_step.x = x_hist
+
+            # One-step prediction of [v, u]
+            vu_next = self.one_step_model(graph_step)  # (N, 6)
+            preds.append(vu_next)
+
+            # Build next full state by carrying acceleration from current last state.
+            x_last = x_hist[:, :, -1]  # (N, 9)
+            next_state = x_last.clone()
+            next_state[:, 3:] = vu_next
+
+            # Slide window.
+            x_hist = torch.cat([x_hist[:, :, 1:], next_state.unsqueeze(-1)], dim=2)
+
+        return torch.stack(preds, dim=1)  # (N, horizon, 6)
+
 class EncoderDecodeGNNForce(EncodeDecodeGNNGeneral):
     def __init__(self, 
                  node_encoder, 

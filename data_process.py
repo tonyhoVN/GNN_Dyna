@@ -175,7 +175,8 @@ def process_gnn_data(data_folder: str, geometry_path: str):
     delta_T = []
     total_kinetic_energy = []
     total_internal_energy = []
-    num_series = 3
+    num_series = 5 # number of historical steps to include in node features (including current step)
+    pred_horizon = 5 # number of future steps to predict (starting from next step)
 
 
     # Get node features
@@ -204,7 +205,7 @@ def process_gnn_data(data_folder: str, geometry_path: str):
     node_feat_series = np.stack(node_feat_series, axis=2)  # (N, 9, T)
 
     # Step2: Get prediction features and energies
-    for t in range(num_series - 1, num_steps - 1):
+    for t in range(num_series - 1, num_steps - pred_horizon):
         # Extract node features for entire node at time t with history
         node_feat = node_feat_series[:, :, t - num_series + 1: t + 1]  # (N, 9, num_series)
         # node_feat = node_feat.reshape(node_feat.shape[0], -1)  # (N, 9*num_series)
@@ -217,23 +218,26 @@ def process_gnn_data(data_folder: str, geometry_path: str):
         delta_t = time[t + 1] - time[t]
         delta_T.append(delta_t)
 
-        # Node feature prediction
-        x_t_1 = node_feat_series[:, :, t + 1]
-        predict_features.append(x_t_1) # (N, 9)
+        # Multi-step target: next 5 timesteps
+        y_next = node_feat_series[:, :, t + 1: t + 1 + pred_horizon]  # (N, 9, 5)
+        y_next = np.transpose(y_next, (0, 2, 1))  # (N, 5, 9)
+        predict_features.append(y_next)
 
         # Store total energies include current and next step
         # current step energy used for train Physics net
         # next step energy used for train GNN net
-        total_kinetic_energy.append(np.array([kinetic_energy[0].data[t],
-                                            kinetic_energy[0].data[t+1]])) # (2, )
-        total_internal_energy.append(np.array([internal_energy[0].data[t],
-                                            internal_energy[0].data[t+1]])) # (2, )
+        total_kinetic_energy.append(
+            np.array([kinetic_energy[0].data[t], kinetic_energy[0].data[t + 1]])
+        )  # (2, )
+        total_internal_energy.append(
+            np.array([internal_energy[0].data[t], internal_energy[0].data[t + 1]])
+        )  # (2, )
 
     np.savez_compressed(
         save_data_path,
         initial_coords=initial_coords,
         X_list=np.array(all_node_features),  # (num_samples, N, 9, num_series)
-        Y_list=np.array(predict_features),  # (num_samples, N, 9)
+        Y_list=np.array(predict_features),  # (num_samples, N, 5, 9)
         pos_list = np.array(all_node_pos),  # (num_samples, N, 3)
         total_internal_energy=total_internal_energy,  # (num_samples, 2)
         total_kinetic_energy=total_kinetic_energy,  # (num_samples, 2)

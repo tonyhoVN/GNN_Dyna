@@ -224,7 +224,7 @@ def add_failure_strain(input_dir: str, output_dir: str, strain_failure:float = 0
     with open(output_dir, "w") as output_file:
         output_file.writelines(lines)
 
-def run_cfile_ls_prepost(cfile_path, timeout = 10):
+def run_cfile_ls_prepost(cfile_path, timeout = 20):
     """
     Runs LS-PrePost in batch mode to process a command file (cfile) to merge nodes within a threshold.
     

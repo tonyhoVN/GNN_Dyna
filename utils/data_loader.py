@@ -17,7 +17,7 @@ class GraphData(Data):
         self,
         x: torch.Tensor,                 # (N, F, T)
         edge_index: torch.Tensor,        # (2, E)
-        y: torch.Tensor,                # (N, F)
+        y: torch.Tensor,                # (N, H, F) multi-step or (N, F) one-step
         x_initial: torch.Tensor,     # (N, 3)
         pos: torch.Tensor,
         node_mass: Optional[torch.Tensor] = None,     # (N,)
@@ -76,11 +76,14 @@ class FEMDataset(Dataset):
         
         # Load time series and geometry data
         kinematic_data = np.load(data_path, allow_pickle=True)
+        geometry_data = None
         if geometry_path is None:
             if "geometry_path" in kinematic_data:
                 geometry_path = os.path.join(os.path.dirname(data_path), str(kinematic_data["geometry_path"]))
         if geometry_path and os.path.isfile(geometry_path):
             geometry_data = np.load(geometry_path, allow_pickle=True)
+        if geometry_data is None:
+            raise FileNotFoundError(f"Geometry data file not found: {geometry_path}")
 
         # Node features and its prediction
         self.X_list = kinematic_data['X_list'] # list[(N, F, T)] size = time_steps
@@ -165,7 +168,7 @@ class FEMDataset(Dataset):
     
     def __getitem__(self, idx):
         current_state = torch.as_tensor(self.X_list[idx], dtype=torch.float)  # (N, F, T)
-        predict_feature = torch.as_tensor(self.Y_list[idx], dtype=torch.float)    # (N, F,)
+        predict_feature = torch.as_tensor(self.Y_list[idx], dtype=torch.float)    # (N, H, F) or (N, F)
         node_pos = torch.as_tensor(self.pos_list[idx], dtype=torch.float)  # (N, 3)
         delta_t = torch.as_tensor(self.Delta_t[idx], dtype=torch.float)  # scalar
         total_internal_energy = None

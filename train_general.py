@@ -153,7 +153,10 @@ def main():
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
             y_predict = model(batch_graphs)
-            batch_loss = loss(y_predict, batch_graphs.y[:, 3:])  # only compute loss on velocity and displacement
+            y_target = batch_graphs.y
+            if y_target.dim() == 3:
+                y_target = y_target[:, 0, :]  # first future step
+            batch_loss = loss(y_predict, y_target[:, 3:])  # only velocity and displacement
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -172,7 +175,10 @@ def main():
                 # if batch_graphs.delta_t is not None and batch_graphs.delta_t.numel() == batch_graphs.num_graphs:
                 batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
                 y_predict = model(batch_graphs)
-                val_loss += loss(y_predict, batch_graphs.y[:, 3:]).item()
+                y_target = batch_graphs.y
+                if y_target.dim() == 3:
+                    y_target = y_target[:, 0, :]
+                val_loss += loss(y_predict, y_target[:, 3:]).item()
 
         avg_val_loss = val_loss / max(len(valid_loader), 1)
 
