@@ -93,7 +93,7 @@ class FEMDataset(Dataset):
         self.Delta_t = kinematic_data['Delta_t'] # N
 
         # Initial coordinates 
-        self.X_initial = torch.as_tensor(geometry_data["initial_coords"], dtype=torch.float)  # (N, 3)
+        self.X_initial = torch.as_tensor(kinematic_data["initial_coords"], dtype=torch.float)  # (N, 3)
 
         # total target energies if available
         self.total_internal_energy = kinematic_data['total_internal_energy'] if 'total_internal_energy' in kinematic_data else None

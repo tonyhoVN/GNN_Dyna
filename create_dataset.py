@@ -53,7 +53,7 @@ if __name__ == "__main__":
     memory = args.memory
     for i in range(args.num_runs):
         # Create k model with random velocity 
-        subprocess.run([sys.executable, "-m", "ball_plate"], check=True, cwd=root)
+        # subprocess.run([sys.executable, "-m", "ball_plate"], check=True, cwd=root)
 
         # Translate model and run simulation
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

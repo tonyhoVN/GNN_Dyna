@@ -249,9 +249,10 @@ def translate_model(keyword_path: str = None, output_path: str = None):
     cfile_path = os.path.join(root, "cfile", "translate.cfile")
 
     # Random translation (units = model units)
-    x = random.uniform(-100, 100)
-    y = random.uniform(-100, 100)
-    z = random.uniform(0, 20)
+    x = random.uniform(-50, 50)
+    y = random.uniform(-50, 50)
+    # z = random.uniform(0, 20)
+    z = 0.0
 
     write_translate_cfile(
         output_path=cfile_path,

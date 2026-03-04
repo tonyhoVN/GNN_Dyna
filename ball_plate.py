@@ -97,7 +97,7 @@ solution.open_files(fns)
 # For the D3plots, set simulation termination time, simulation timestep, and
 # output frequency.
 
-solution.set_termination(termination_time=30.0)
+solution.set_termination(termination_time=15.0)
 
 ballplate = DynaMech(AnalysisType.NONE)
 solution.add(ballplate)
@@ -122,7 +122,8 @@ matplastic = MatPiecewiseLinearPlasticity(mass_density=7.83e-6, young_modulus=20
 #
 
 plate = ShellPart(1)
-plate.set_element_formulation(ShellFormulation.BELYTSCHKO_TSAY)
+# plate.set_element_formulation(ShellFormulation.BELYTSCHKO_TSAY)
+plate.set_element_formulation(ShellFormulation.FULLY_INTEGRATED)
 plate.set_material(matplastic)
 plate.set_thickness(1)
 plate.set_integration_points(5)
@@ -130,7 +131,8 @@ ballplate.parts.add(plate)
 
 ball = SolidPart(2)
 ball.set_material(matrigid)
-ball.set_element_formulation(SolidFormulation.CONSTANT_STRESS_SOLID_ELEMENT)
+# ball.set_element_formulation(SolidFormulation.CONSTANT_STRESS_SOLID_ELEMENT)
+ball.set_element_formulation(SolidFormulation.EIGHT_POINT_HEXAHEDRON)
 ballplate.parts.add(ball)
 
 
@@ -195,7 +197,9 @@ ballplate.boundaryconditions.create_spc(NodeSet(spc), rx=False, ry=False, rz=Fal
 # to initialize the velocity components in the desired direction.
 # for i in range(1, 1652):
 #     ballplate.initialconditions.create_velocity_node(i, trans=Velocity(0, 0, -10))
-vel = random.uniform(-1.0, -3.0)
+
+# vel = random.uniform(-1.0, -3.0) # Random velocity between -1.0 and -3.0
+vel = -5.0
 ballplate.initialconditions.create_velocity(PartSet([2]), 0, Velocity(0,0,vel))
 ###############################################################################
 # Define database outputs
@@ -205,8 +209,8 @@ ballplate.initialconditions.create_velocity(PartSet([2]), 0, Velocity(0,0,vel))
 # solution.set_output_database(glstat=0.1, matsum=0.1, sleout=0.1, nodout=0.1, nodfor=0.1)
 ascii_types = ["GLSTAT", "MATSUM", "NODOUT", "NODFOR", "NCFORC", "SLEOUT" ,"ELOUT"]
 for ascii_type in ascii_types:
-    solution.create_database_ascii(type=ascii_type, dt=0.1, binary=3)
-solution.create_database_binary(dt=0.1)
+    solution.create_database_ascii(type=ascii_type, dt=0.05, binary=3)
+solution.create_database_binary(dt=0.05)
 serverpath = solution.save_file()
 
 ###############################################################################

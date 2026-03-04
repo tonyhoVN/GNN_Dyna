@@ -74,7 +74,7 @@ class GraphNetBlock(MessagePassing):
         super().__init__(aggr='add')
 
         # egde update net: eij' = f1(xi, xj, eij)
-        self.edge_net = MLP([edge_feat_dim + 2*node_feat_dim + 8, 
+        self.edge_net = MLP([edge_feat_dim + 1*node_feat_dim + 8, 
                              hidden_dim, 
                              hidden_dim], layer_norm)
 
@@ -114,7 +114,7 @@ class GraphNetBlock(MessagePassing):
 
         # stretch = d / d0  # (E,1)
 
-        msg = torch.cat([x_i, x_j, r0_hat, d0, r_hat, d, edge_attr], dim=-1)
+        msg = torch.cat([x_i - x_j, r0_hat, d0, r_hat, d, edge_attr], dim=-1)
         return self.edge_net(msg) 
 
     def update(self, aggr_out, x):
@@ -181,7 +181,8 @@ class GraphNetSurfaceBlock(MessagePassing):
 
         keep = d <= self.threshold                                # (E,)
         edge_index_select = edge_index[:, keep]                          # (2,E_keep)
-
+        # edge_index_select = edge_index
+        
         if edge_index_select.numel() == 0:
             return x     # (N,H)
 

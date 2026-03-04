@@ -86,14 +86,22 @@ random.seed(42)
 
 if __name__ == "__main__":
     import os
-    root = os.getcwd()
-    config_path = os.path.join(root, "config", "gnn_contact_general.json")
+    # root = os.getcwd()
+    # config_path = os.path.join(root, "config", "gnn_contact_general.json")
 
-    model_config = ModelConfig.from_json(config_path)
-    model = create_gnn_model(model_config)
-    print(model)
-    num_params = sum(p.numel() for p in model.parameters())
-    num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Model parameters: {num_params} (trainable: {num_trainable})")
+    # model_config = ModelConfig.from_json(config_path)
+    # model = create_gnn_model(model_config)
+    # print(model)
+    # num_params = sum(p.numel() for p in model.parameters())
+    # num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # print(f"Model parameters: {num_params} (trainable: {num_trainable})")
+    # parent_dir = os.path.dirname(os.path.abspath(__file__))
+    # pass
 
-    pass
+    import pyvista as pv
+    pl = pv.Plotter()
+    _ = pl.add_mesh(pv.Sphere(center=(2, 0, 0)), color='r')
+    _ = pl.add_mesh(pv.Sphere(center=(0, 2, 0)), color='g')
+    _ = pl.add_mesh(pv.Sphere(center=(0, 0, 2)), color='b')
+    _ = pl.add_axes_at_origin()
+    pl.show()

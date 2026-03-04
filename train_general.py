@@ -139,6 +139,7 @@ def main():
 
     #### Start training loop
     # model.train()
+    best_val_loss = float("inf")
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
@@ -188,8 +189,12 @@ def main():
             f.write(f"{avg_loss}\n")
 
         if (epoch + 1) % save_every == 0:
-            torch.save(model.state_dict(), model_path)
-            print(f"Saved model to {model_path}")
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                torch.save(model.state_dict(), model_path)
+                print(f"Saved model to {model_path} with val loss {best_val_loss:.6f}")
+            # torch.save(model.state_dict(), model_path)
+            # print(f"Saved model to {model_path}")
 
     print(f"Saved loss history to {log_path}")
     if run is not None:

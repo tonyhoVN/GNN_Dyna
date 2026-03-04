@@ -1,5 +1,5 @@
 bgstyle plain
-openc keyword "D:\Projects_code\ball_plate\output\20260122_094004\ball_plate.k"
+openc keyword "D:\Projects_code\ball_plate\output\20260302_133110\ball_plate.k"
 ident select 1
 genselect target node
 genselect 3dsurf on

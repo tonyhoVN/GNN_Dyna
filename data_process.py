@@ -146,7 +146,7 @@ def build_geometry_data(data_folder: str):
     boundary_nodes[spc_] = 1 # Zerobased index
     
     return {
-        "initial_coords": coords0,
+        # "initial_coords": coords0,
         "node_mass": node_mass_data_gnn,
         "boundary_constraint": boundary_nodes,
         "element_id_solids": np.array(list(solids.keys())),
@@ -183,11 +183,15 @@ def process_gnn_data(data_folder: str, geometry_path: str):
     acceleration_fc: dpf.FieldsContainer = model.results.acceleration.on_all_time_freqs.eval()  # mm/ms^2 unit
     velocity_fc: dpf.FieldsContainer = model.results.velocity.on_all_time_freqs.eval()  # mm/ms unit
     displacement_fc: dpf.FieldsContainer = model.results.displacement.on_all_time_freqs.eval()  # mm unit
+    initial_fc: dpf.FieldsContainer = model.results.initial_coordinates.on_all_time_freqs.eval()  # mm unit
     kinetic_energy = model.results.global_kinetic_energy.eval()
     internal_energy = model.results.global_internal_energy.eval()
     # stress_field_container:dpf.FieldsContainer = model.results.stress.on_all_time_freqs.eval() # MPa unit
     time = np.array(model.metadata.time_freq_support.time_frequencies.data)  # ms unit
     # delta_t = time[1:] - time[:-1]
+
+    # Initial coordinates for computing displacements
+    initial_coords = np.asarray(initial_fc[0].data)
 
     # Step1: Extract node features for entire node at every time step
     num_steps = len(time)
@@ -227,6 +231,7 @@ def process_gnn_data(data_folder: str, geometry_path: str):
 
     np.savez_compressed(
         save_data_path,
+        initial_coords=initial_coords,
         X_list=np.array(all_node_features),  # (num_samples, N, 9, num_series)
         Y_list=np.array(predict_features),  # (num_samples, N, 9)
         pos_list = np.array(all_node_pos),  # (num_samples, N, 3)
