@@ -2,7 +2,6 @@ bgstyle plain
 openc keyword "D:\Projects_code\ball_plate\output1\test_data\ball_plate.k"
 ident select 1
 genselect target node
-genselect 3dsurf on
-genselect node add part 2
+genselect node add setnode 1
 ident select 0
 exit

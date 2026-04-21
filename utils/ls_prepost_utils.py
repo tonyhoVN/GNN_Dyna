@@ -33,6 +33,8 @@ REAL_EDGES = {
     ]
 }
 
+_NODE_ID_RE = re.compile(r"NODE ID=\s*(\d+)")
+
 # MATERIAL_PROPERTIES = {
 #     0: [log1p(207), log1p(0.3), log1p(0.2), log1p(2), 1, 0], # Plastic mat [E, nu, sigma_y, E_t, 1, 0]
 #     1: [log1p(207), log1p(0.3), 0, 0, 0, 1], # Rigid mat [E, nu, 0, 0, 0, 1]
@@ -43,9 +45,9 @@ MATERIAL_PROPERTIES = {
     1: [207, 0.3, 0, 0, 0, 1], # Rigid mat [E, nu, 0, 0, 0, 1]
 }
 
-spc_nodes = [34,35,51,52,68,69,85,86,102,103,119,120,136,137,153,154,
-            170,171,187,188,204,205,221,222,238,239,255,256] + list(range(1,19)) + list(range(272,290)) # 1-based index
-SPC_NODES = {nid - 1 for nid in spc_nodes} # 0-base index
+# spc_nodes = [34,35,51,52,68,69,85,86,102,103,119,120,136,137,153,154,
+#             170,171,187,188,204,205,221,222,238,239,255,256] + list(range(1,19)) + list(range(272,290)) # 1-based index
+# SPC_NODES = {nid - 1 for nid in spc_nodes} # 0-base index
 
 def read_element_masses(msg_path: Union[str, Path]) -> List[Tuple[int, float]]:
     """
@@ -92,13 +94,16 @@ def build_element_connectivity(mesh):
     :param mesh: Mesh object from DPF
     :return: Dictionary mapping element IDs to lists of node IDs
     """
-    element_ids = list(mesh.element_ids)
     element_to_nodes = {}
-    for element_index, node_ids in enumerate(mesh.element_to_node_ids_connectivity):
-        element_id = int(element_ids[element_index])
-        element_to_nodes[element_id] = [int(nid) for nid in node_ids]
+    ids = []
+    for element in mesh.elements:
+        element_id = element.id
+        ids.append(element_id)
+        element_to_nodes[element_id] = element.to_node_connectivity
     # Sort by element index
+    # breakpoint()
     element_to_nodes = dict(sorted(element_to_nodes.items(), key= lambda x: x[0]))
+    # breakpoint()
     return element_to_nodes
 
 def build_element_material_map(mesh):
@@ -182,7 +187,6 @@ def write_translate_cfile(output_path: str,
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-
 
 def compute_node_masses(element_masses, element_to_nodes):
     """
@@ -296,18 +300,69 @@ def get_nodes_on_surface(keyword_path: str, part_id: int) -> List[int]:
     run_cfile_ls_prepost(cfile_path)
 
     node_ids = []
-    node_id_re = re.compile(r"NODE ID=\s*(\d+)")
     msg_path = Path(msg_path)
     if not msg_path.is_file():
         raise FileNotFoundError(f"LS-PrePost message file not found: {msg_path}")
 
     with msg_path.open("r", encoding="utf-8", errors="ignore") as f:
         for line in f:
-            match = node_id_re.search(line)
+            match = _NODE_ID_RE.search(line)
             if match:
                 node_ids.append(int(match.group(1)))
 
     print(f"Nodes on surface of part {part_id}: {len(node_ids)}")
+
+    return node_ids
+
+def write_get_spc_cfile(keyword_path: str, output_path: str, spc_set_id: int):
+    """
+    Create an LS-PrePost command file that selects all SPC nodes
+    """
+    lines = [
+        "bgstyle plain",
+        f'openc keyword "{keyword_path}"',
+        f'ident select {spc_set_id}',
+        "genselect target node",
+        f"genselect node add setnode {spc_set_id}",
+        "ident select 0",
+        "exit"
+    ]
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+def get_spc_nodes(keyword_path: str, spc_set_id: int) -> List[int]:
+    """
+    Get all SPC nodes on the given set ID, returned as zero-based node IDs.
+    """
+    dir_file = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(dir_file)
+    cfile_path = os.path.join(root, "cfile", "get_spc_nodes.cfile")
+    msg_path = os.path.join(root, "cfile", "lspost.msg")
+
+    # Write cfile template
+    write_get_spc_cfile(
+        keyword_path=keyword_path,
+        output_path=cfile_path,
+        spc_set_id=spc_set_id
+    )
+
+    # Run LS-prepost with cfile
+    run_cfile_ls_prepost(cfile_path)
+
+    # Get node ids with zero-based index
+    node_ids = []
+    msg_path = Path(msg_path)
+    if not msg_path.is_file():
+        raise FileNotFoundError(f"LS-PrePost message file not found: {msg_path}")
+
+    with msg_path.open("r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            match = _NODE_ID_RE.search(line)
+            if match:
+                node_ids.append(int(match.group(1)) - 1) # zero-based index
+
+    print(f"SPC nodes in set {spc_set_id}: {len(node_ids)}")
 
     return node_ids
 

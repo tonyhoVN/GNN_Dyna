@@ -18,9 +18,10 @@ def parse_args():
     return parser.parse_args()
 
 # Build edges for GNN
-def build_edges_gnn_from_mesh(mesh):
+def build_edges_gnn_from_mesh(mesh, spc_nodes):
     """
     Build directed edges (2 per undirected mesh edge) for a GNN from a mesh.
+    spc_nodes is in zero-based index
 
     Returns
     -------
@@ -48,12 +49,12 @@ def build_edges_gnn_from_mesh(mesh):
 
             # add n1 -> n2 if target n2 is free
             # Allow: SPC->normal, normal->normal
-            if n2 not in SPC_NODES:
+            if n2 not in spc_nodes:
                 edges_list.append((n1, n2))
                 attr_list.append(MATERIAL_PROPERTIES[mat])
 
             # add n2 -> n1 if target n1 is free
-            if n1 not in SPC_NODES:
+            if n1 not in spc_nodes:
                 edges_list.append((n2, n1))
                 attr_list.append(MATERIAL_PROPERTIES[mat])
 
@@ -84,6 +85,12 @@ def build_geometry_data(data_folder: str):
     element_to_nodes = build_element_connectivity(mesh)
     element_to_material = build_element_material_map(mesh)
 
+    max_id = 0
+    for ele in list(element_to_nodes.values()):
+        max_id = max([max_id, max(ele)])
+
+    print(f"Max node id is: {max_id}")
+
     # Compute node masses
     write_mass_cfile(cfile_path, keyword_path, element_to_nodes)
     run_cfile_ls_prepost(cfile_path)
@@ -100,8 +107,12 @@ def build_geometry_data(data_folder: str):
     # Prepare node mass array aligned with zero-based node indexing
     node_mass_data_gnn = np.array(list(node_mass.values()))
 
+    # Get SPC_Nodes 
+    spc_nodes = get_spc_nodes(keyword_path, 1) # zero-based
+    print(f"Get {len(spc_nodes)} SPC nodes")
+
     # Build edges connection and edge attribute for GNN
-    edges_gnn, edges_attr = build_edges_gnn_from_mesh(mesh) # edges_attr: material id per edge
+    edges_gnn, edges_attr = build_edges_gnn_from_mesh(mesh, spc_nodes) # edges_attr: material id per edge
 
     # Node dis
     initial_fc: dpf.FieldsContainer = model.results.initial_coordinates.on_all_time_freqs.eval()
@@ -131,18 +142,19 @@ def build_geometry_data(data_folder: str):
     # Construct surface node lists (zero-based)
     plate_surf_nodes = [nid - 1 for nid in get_nodes_on_surface(keyword_path, part_id=1)]
     ball_surf_nodes = [nid - 1 for nid in get_nodes_on_surface(keyword_path, part_id=2)]
+
     # Connection between nodes of 2 surfaces 
     edge_surf_index = []
     for i in plate_surf_nodes:
         for j in ball_surf_nodes:
             edge_surf_index.append((i,j))
-            if i not in SPC_NODES:
+            if i not in spc_nodes:
                 edge_surf_index.append((j,i))
     edge_surf_index = np.asarray(edge_surf_index, dtype=int) #(S, 2)
 
     # Fixed boundary nodes with zero-based indexing
     boundary_nodes = np.zeros(node_mass_data_gnn.shape[0], dtype=np.float32) # (N,)
-    spc_ = [ind for ind in SPC_NODES]
+    spc_ = [ind for ind in spc_nodes]
     boundary_nodes[spc_] = 1 # Zerobased index
     
     return {
@@ -160,10 +172,10 @@ def build_geometry_data(data_folder: str):
     }
 
 
-def process_gnn_data(data_folder: str, geometry_path: str):
+def process_gnn_data(data_parent_folder: str, data_folder: str, geometry_path: str):
     d3plot_path = os.path.join(data_folder, "d3plot")
     save_data_path = os.path.join(
-        root, "data", os.path.basename(data_folder) + "_time_data.npz"
+        root, data_parent_folder, os.path.basename(data_folder) + "_time_data.npz"
     )
 
     model = load_model_metadata(d3plot_path)
@@ -254,14 +266,16 @@ if __name__ == "__main__":
     args = parse_args()
     
     # Process all data folders in output/
+    output_folder = "output1"
     data_folders = [
-        os.path.join(root, "output", d)
-        for d in os.listdir(os.path.join(root, "output"))
-        if os.path.isdir(os.path.join(root, "output", d))
+        os.path.join(root, output_folder, d)
+        for d in os.listdir(os.path.join(root, output_folder))
+        if os.path.isdir(os.path.join(root, output_folder, d))
     ]
 
     # Save geometry information
-    geometry_path = os.path.join(root, "data", "geometry_shared.npz")
+    gnn_data_process_folder = "data1"
+    geometry_path = os.path.join(root, gnn_data_process_folder, "geometry_shared.npz")
     geometry_data = build_geometry_data(data_folders[0])
     np.savez_compressed(geometry_path, **geometry_data)
     print(f"Geometry data saved to: {geometry_path}")
@@ -270,4 +284,4 @@ if __name__ == "__main__":
     if not args.skip_time:
         for folder in data_folders:
             print(f"Processing time series of folder: {folder}")
-            process_gnn_data(folder, geometry_path)
+            process_gnn_data(gnn_data_process_folder, folder, geometry_path)

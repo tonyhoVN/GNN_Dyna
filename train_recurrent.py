@@ -119,6 +119,10 @@ def main():
             batch_graphs = batch_graphs.to(device)
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
+            # Add noise to input features during training for regularization
+            noise = torch.randn_like(batch_graphs.x) * 0.01
+            batch_graphs.x = batch_graphs.x + noise
+
             pred_seq = model(batch_graphs)  # (N_total, H, 6)
             y_target = batch_graphs.y
             if y_target.dim() == 2:

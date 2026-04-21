@@ -22,11 +22,12 @@ ENV/
 coverage.xml
 htmlcov/
 
-output/
-data/
+output*/
+data*/
 save_model/
 train_log/
 images/
+temp/
 
 .idea/
 .vscode/

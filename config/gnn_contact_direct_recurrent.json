@@ -5,9 +5,9 @@
     "percent": 50
   },
   "split": {
-    "train": 0.75,
+    "train": 0.85,
     "valid": 0.15,
-    "test": 0.1
+    "test": 0.0
   },
   "model": {
     "type": "direct_recurrent",
@@ -41,7 +41,7 @@
   "training": {
     "batch_size": 12,
     "learning_rate": 1e-4,
-    "epochs": 100,
+    "epochs": 150,
     "save_every": 10
   }
 }

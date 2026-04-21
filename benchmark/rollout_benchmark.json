@@ -1,0 +1,48 @@
+{
+    "models": [
+        {
+            "name": "Baseline",
+            "config": "config/base_line.json",
+            "save_pt": "save_model/baseline_64.pt"
+        },
+        {
+            "name": "GNN Contact Direct Recurrent",
+            "config": "config/gnn_contact_direct_recurrent.json",
+            "save_pt": "save_model/gnn_recurrent_20260305_010831.pt"
+        },
+        {
+            "name": "GNN Contact Direct One Step",
+            "config": "config/gnn_contact_direct_no_acc.json",
+            "save_pt": "save_model/direct_one_step_64.pt"
+        }
+    ],
+    "metrics": [
+        {
+            "name": "Position MAE",
+            "type": "mae",
+            "target": "position"
+        },
+        {
+            "name": "Maximum Position Error",
+            "type": "max",
+            "target": "position"
+        }
+    ], 
+    "test_data": {
+        "data_dir": "data",
+        "file_glob": [
+            "20260302_133411_time_data.npz",
+            "20260302_133415_time_data.npz",
+            "20260302_133419_time_data.npz",
+            "20260302_133424_time_data.npz",
+            "20260302_133428_time_data.npz",
+            "20260302_133433_time_data.npz",
+            "20260302_133437_time_data.npz", 
+            "20260302_133441_time_data.npz", 
+            "20260302_133446_time_data.npz"
+        ],
+        "interval_ms": 100,
+        "start_index": 22,
+        "rollout_steps": 150
+    }
+}
