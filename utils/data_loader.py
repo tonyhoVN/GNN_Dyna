@@ -63,14 +63,14 @@ class GraphData(Data):
     
 
 class FEMDataset(Dataset):
-    def __init__(self, data_path, geometry_path: str = None):
+    def __init__(self, 
+            data_path, 
+            geometry_path: str = None, 
+            history_len: Optional[int] = 5,
+            predict_horizon: Optional[int] = 5
+        ):
         """
-        X_list: list of input feature tensors for each time step 
-                list[(Nodes, features, consecutive_time_frames)]
-        Y_list: list of target feature tensors for each time step
-                list[(Nodes, target_features,)]
-
-        delta_t: time interval between consecutive frames
+        Load FEM simulation data from .npz files to form a GNN dataset. 
         """
         super().__init__()
         
@@ -86,8 +86,15 @@ class FEMDataset(Dataset):
             raise FileNotFoundError(f"Geometry data file not found: {geometry_path}")
 
         # Node features and its prediction
-        self.X_list = kinematic_data['X_list'] # list[(N, F, T)] size = time_steps
-        self.Y_list = kinematic_data['Y_list'] # list[(N, F,)] size = time_steps
+        self.X_list = kinematic_data['X_list'] # (samples, N, F, T)
+        self.Y_list = kinematic_data['Y_list'] # (samples, N, H, F)
+        # Expected X shape: (num_samples, num_nodes, num_features, time)
+        if history_len is not None:
+            self.X_list = self.X_list[:, :, :, :history_len]
+
+        # Expected Y shape: (num_samples, num_nodes, target_features, horizon)
+        if predict_horizon is not None:
+            self.Y_list = self.Y_list[:, :, :predict_horizon, :] 
 
         # Node position
         self.pos_list = kinematic_data['pos_list']

@@ -98,10 +98,19 @@ if __name__ == "__main__":
     # parent_dir = os.path.dirname(os.path.abspath(__file__))
     # pass
 
-    import pyvista as pv
-    pl = pv.Plotter()
-    _ = pl.add_mesh(pv.Sphere(center=(2, 0, 0)), color='r')
-    _ = pl.add_mesh(pv.Sphere(center=(0, 2, 0)), color='g')
-    _ = pl.add_mesh(pv.Sphere(center=(0, 0, 2)), color='b')
-    _ = pl.add_axes_at_origin()
-    pl.show()
+    # import pyvista as pv
+    # pl = pv.Plotter()
+    # _ = pl.add_mesh(pv.Sphere(center=(2, 0, 0)), color='r')
+    # _ = pl.add_mesh(pv.Sphere(center=(0, 2, 0)), color='g')
+    # _ = pl.add_mesh(pv.Sphere(center=(0, 0, 2)), color='b')
+    # _ = pl.add_axes_at_origin()
+    # pl.show()
+
+    horizon = 8
+
+    t = torch.arange(horizon)
+
+    tau = 0.4*horizon  # more reasonable scale for H=5
+    weights = torch.exp(-t / tau)
+    weights = weights / weights.sum()
+    print(weights)

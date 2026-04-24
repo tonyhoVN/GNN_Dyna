@@ -187,7 +187,7 @@ def process_gnn_data(data_parent_folder: str, data_folder: str, geometry_path: s
     delta_T = []
     total_kinetic_energy = []
     total_internal_energy = []
-    num_series = 5 # number of historical steps to include in node features (including current step)
+    hist_len = 5 # number of historical steps to encode time-series node features (including current step)
     pred_horizon = 5 # number of future steps to predict (starting from next step)
 
 
@@ -209,7 +209,7 @@ def process_gnn_data(data_parent_folder: str, data_folder: str, geometry_path: s
     # Step1: Extract node features for entire node at every time step
     num_steps = len(time)
     node_feat_series = []
-    for i in range(num_steps):  # Start from num_series-1 to T-1
+    for i in range(num_steps):  # Start from hist_len-1 to T-1
         acc = np.asarray(acceleration_fc[i].data)
         vel = np.asarray(velocity_fc[i].data)
         disp = np.asarray(displacement_fc[i].data)
@@ -217,10 +217,10 @@ def process_gnn_data(data_parent_folder: str, data_folder: str, geometry_path: s
     node_feat_series = np.stack(node_feat_series, axis=2)  # (N, 9, T)
 
     # Step2: Get prediction features and energies
-    for t in range(num_series - 1, num_steps - pred_horizon):
+    for t in range(hist_len - 1, num_steps - pred_horizon):
         # Extract node features for entire node at time t with history
-        node_feat = node_feat_series[:, :, t - num_series + 1: t + 1]  # (N, 9, num_series)
-        # node_feat = node_feat.reshape(node_feat.shape[0], -1)  # (N, 9*num_series)
+        node_feat = node_feat_series[:, :, t - hist_len + 1: t + 1]  # (N, 9, hist_len)
+        # node_feat = node_feat.reshape(node_feat.shape[0], -1)  # (N, 9*hist_len)
         all_node_features.append(node_feat)
 
         # Position of nodes at time t
@@ -248,7 +248,7 @@ def process_gnn_data(data_parent_folder: str, data_folder: str, geometry_path: s
     np.savez_compressed(
         save_data_path,
         initial_coords=initial_coords,
-        X_list=np.array(all_node_features),  # (num_samples, N, 9, num_series)
+        X_list=np.array(all_node_features),  # (num_samples, N, 9, hist_len)
         Y_list=np.array(predict_features),  # (num_samples, N, 5, 9)
         pos_list = np.array(all_node_pos),  # (num_samples, N, 3)
         total_internal_energy=total_internal_energy,  # (num_samples, 2)

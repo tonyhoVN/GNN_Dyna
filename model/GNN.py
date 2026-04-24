@@ -693,18 +693,22 @@ class EncodeDecodeGNNDirectRecurrent(nn.Module):
     Output is a timeseries of next states [v, u] with shape (N, horizon, 6).
     """
 
-    def __init__(self, one_step_model: EncodeDecodeGNNDirect, horizon: int = 5):
+    def __init__(self, one_step_model: EncodeDecodeGNNDirect, pred_horizon: int = 5, hist_len: int = 3):
         super().__init__()
         self.one_step_model = one_step_model
-        self.horizon = horizon
+        self.pred_horizon = pred_horizon
+        self.hist_len = hist_len
 
     def forward(self, graph: GraphData):
         # Keep a local rolling history so caller graph is not mutated.
         x_hist = graph.x.clone()  # (N, F, T)
         preds = []
 
-        for _ in range(self.horizon):
+        for _ in range(self.pred_horizon):
             graph_step = graph.clone()
+
+            # Set current history as input to one-step model.
+            # graph_step.x = x_hist[:, :, -self.hist_len:]  # (N, F, hist_len)
             graph_step.x = x_hist
 
             # One-step prediction of [v, u]

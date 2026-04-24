@@ -89,6 +89,7 @@ def rollout_positions(model, mode, dataset, start_index, rollout_steps, device):
 
     gt_positions = []
     pred_positions = []
+    total_predict_time = 0.0
 
     with torch.no_grad():
         for step in range(rollout_steps):
@@ -100,14 +101,17 @@ def rollout_positions(model, mode, dataset, start_index, rollout_steps, device):
             gt_positions.append((x_initial.detach().cpu() + gt_y[:, 6:9]).numpy())
 
             graph_in = dataset[idx].to(device)
+            t0 = time.perf_counter()
             next_state = predict_next_state(mode, model, graph_in, x_hist)
+            total_predict_time += time.perf_counter() - t0
             pred_positions.append((x_initial + next_state[:, 6:9]).detach().cpu().numpy())
 
             x_hist = torch.cat([x_hist[:, :, 1:], next_state.unsqueeze(-1)], dim=2)
 
     gt_positions = np.asarray(gt_positions)
     pred_positions = np.asarray(pred_positions)
-    return gt_positions, pred_positions, x_initial.detach().cpu().numpy()
+    avg_predict_time = total_predict_time / max(1, rollout_steps)
+    return gt_positions, pred_positions, x_initial.detach().cpu().numpy(), avg_predict_time
 
 
 def compute_error_curves(gt_positions, pred_positions, plate_node_count=289):
@@ -117,9 +121,11 @@ def compute_error_curves(gt_positions, pred_positions, plate_node_count=289):
     n_plate = min(int(plate_node_count), n_nodes)
     if n_plate <= 0:
         raise ValueError("plate_node_count must be > 0 and dataset must have at least 1 node.")
+    n_ball = max(0, n_nodes - n_plate)
     return {
         "mae_all": np.mean(err, axis=1),
         "mae_plate": np.mean(err[:, :n_plate], axis=1),
+        "mae_ball": np.mean(err[:, n_plate:], axis=1) if n_ball > 0 else np.mean(err, axis=1),
         "max_all": np.max(err, axis=1),
     }
 
@@ -130,7 +136,7 @@ def derive_d3plot_dir(npz_path, root_dir):
     if not base.endswith(suffix):
         return None
     case_name = base[: -len(suffix)]
-    candidate = os.path.join(root_dir, "output1", case_name)
+    candidate = os.path.join(root_dir, "output", case_name)
     return candidate if os.path.isdir(candidate) else None
 
 
@@ -196,10 +202,29 @@ def _plot_metric_subplot(metric_key, metric_title, ylabel, all_metrics_by_model)
     plt.legend()
 
 
-def plot_benchmark_curves(all_metrics_by_model, output_png):
-    plt.figure(figsize=(14, 5))
+def _plot_accumulated_metric_subplot(metric_key, metric_title, ylabel, all_metrics_by_model):
+    for model_name, metric_map in all_metrics_by_model.items():
+        curves = metric_map.get(metric_key, [])
+        if not curves:
+            continue
+        min_len = min(len(c) for c in curves)
+        arr = np.stack([np.cumsum(c[:min_len]) for c in curves], axis=0)
+        mean = arr.mean(axis=0)
+        std = arr.std(axis=0)
+        x = np.arange(min_len)
+        plt.plot(x, mean, label=model_name)
+        plt.fill_between(x, mean - std, mean + std, alpha=0.2)
+    plt.xlabel("Rollout step")
+    plt.ylabel(ylabel)
+    plt.title(metric_title)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
 
-    plt.subplot(1, 3, 1)
+
+def plot_benchmark_curves(all_metrics_by_model, output_png):
+    plt.figure(figsize=(20, 5))
+
+    plt.subplot(1, 4, 1)
     _plot_metric_subplot(
         metric_key="mae_all",
         metric_title="All Mesh MAE (Mean +/- Std)",
@@ -207,7 +232,7 @@ def plot_benchmark_curves(all_metrics_by_model, output_png):
         all_metrics_by_model=all_metrics_by_model,
     )
 
-    plt.subplot(1, 3, 2)
+    plt.subplot(1, 4, 2)
     _plot_metric_subplot(
         metric_key="mae_plate",
         metric_title="Plate MAE (Nodes 0:289, Mean +/- Std)",
@@ -215,11 +240,19 @@ def plot_benchmark_curves(all_metrics_by_model, output_png):
         all_metrics_by_model=all_metrics_by_model,
     )
 
-    plt.subplot(1, 3, 3)
+    plt.subplot(1, 4, 3)
     _plot_metric_subplot(
-        metric_key="max_all",
-        metric_title="All Mesh Max Error (Mean +/- Std)",
-        ylabel="Max Position Error",
+        metric_key="mae_ball",
+        metric_title="Ball MAE (Mean +/- Std)",
+        ylabel="Position MAE",
+        all_metrics_by_model=all_metrics_by_model,
+    )
+
+    plt.subplot(1, 4, 4)
+    _plot_accumulated_metric_subplot(
+        metric_key="mae_all",
+        metric_title="Accumulated All Mesh MAE (Mean +/- Std)",
+        ylabel="Accumulated Position MAE",
         all_metrics_by_model=all_metrics_by_model,
     )
 
@@ -344,9 +377,12 @@ def main():
     rollout_steps_cfg = int(test_cfg.get("rollout_steps", 50))
     interval_ms = int(test_cfg.get("interval_ms", 100))
 
-    metric_keys = ["mae_all", "mae_plate", "max_all"]
+    metric_keys = ["mae_all", "mae_plate", "mae_ball"]
     all_metrics = {models[m][0]: {k: [] for k in metric_keys} for m in required_modes}
-    first_file_rollouts = {}
+    time_stats = {models[m][0]: {"total_time": 0.0, "total_steps": 0} for m in required_modes}
+    best_file_rollouts = {}
+    best_file_path = None
+    best_score = float("inf")
 
     for i, npz_path in enumerate(files):
         dataset = FEMDataset(npz_path)
@@ -359,25 +395,40 @@ def main():
         per_file = {}
         for mode in required_modes:
             model_name, model = models[mode]
-            gt_pos, pred_pos, x0 = rollout_positions(model, mode, dataset, start_index, rollout_steps, device)
+            gt_pos, pred_pos, x0, avg_step_time = rollout_positions(
+                model, mode, dataset, start_index, rollout_steps, device
+            )
             curves = compute_error_curves(gt_pos, pred_pos, plate_node_count=289)
             for k in metric_keys:
                 all_metrics[model_name][k].append(curves[k])
+            time_stats[model_name]["total_time"] += avg_step_time * rollout_steps
+            time_stats[model_name]["total_steps"] += rollout_steps
             per_file[mode] = (gt_pos, pred_pos, x0)
 
-        if i == 0:
-            first_file_rollouts = per_file
+        recurrent_name = models["recurrent_prediction"][0]
+        recurrent_plate_curve = all_metrics[recurrent_name]["mae_plate"][-1]
+        file_score = float(np.sum(recurrent_plate_curve))
+        if file_score < best_score:
+            best_score = file_score
+            best_file_path = npz_path
+            best_file_rollouts = per_file
 
     plot_path = os.path.join(root, "results", "rollout_benchmark_mae.png")
     plot_benchmark_curves(all_metrics, plot_path)
 
-    if first_file_rollouts:
+    print("Average time per rollout prediction:")
+    for mode in required_modes:
+        model_name = models[mode][0]
+        total_time = time_stats[model_name]["total_time"]
+        total_steps = time_stats[model_name]["total_steps"]
+        avg_ms = 1000.0 * total_time / max(1, total_steps)
+        print(f"  {model_name}: {avg_ms:.3f} ms / rollout step")
+
+    if best_file_rollouts:
         anim_path = os.path.join(root, "results", "rollout_benchmark.mp4")
-        animate_four_panel(files[0], first_file_rollouts, interval_ms, anim_path)
+        print(f"Animating best file by accumulated MAE: {best_file_path}")
+        animate_four_panel(best_file_path, best_file_rollouts, interval_ms, anim_path)
 
 
 if __name__ == "__main__":
     main()
-
-
-

@@ -40,7 +40,14 @@ def load_raw_config(path: str):
 def weighted_sequence_mse(pred_seq, target_seq):
     # pred_seq, target_seq: (N, H, C)
     horizon = pred_seq.shape[1]
-    weights = torch.arange(horizon, 0, -1, device=pred_seq.device, dtype=pred_seq.dtype)
+    
+    # Linear decay weights
+    # weights = torch.arange(horizon, 0, -1, device=pred_seq.device, dtype=pred_seq.dtype)
+
+    # Eponetial decay weights
+    tau = 0.4*horizon 
+    t = torch.arange(horizon, device=pred_seq.device, dtype=pred_seq.dtype)
+    weights = torch.exp(-t / tau)  # Exponential decay
     weights = weights / weights.sum()
     per_h = ((pred_seq - target_seq) ** 2).mean(dim=(0, 2))  # (H,)
     return (per_h * weights).sum()
@@ -50,6 +57,7 @@ def main():
     args = parse_args()
     raw = load_raw_config(args.config)
 
+    # Extract config values with command-line overrides
     data_cfg = raw.get("data", {})
     split_cfg = raw.get("split", {"train": 0.7, "valid": 0.2, "test": 0.1})
     train_cfg = raw.get("training", {})
@@ -64,25 +72,33 @@ def main():
     )
     save_every = args.save_every if args.save_every is not None else int(train_cfg.get("save_every", 10))
 
+    # Load model config for model creation
     model_cfg = ModelConfig.from_json(args.config)
     root = os.getcwd()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    ##### Load dataset #####
     data_path = os.path.join(root, data_dir)
     npz_files = sorted(glob(os.path.join(data_path, file_glob)))
     if not npz_files:
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
 
+    # Subsample files
     percent = float(data_cfg.get("percent", 100))
     k = max(1, int(len(npz_files) * (percent / 100.0)))
-    npz_files = random.sample(npz_files, k)
+    # npz_files = random.sample(npz_files, k)
+    npz_files = npz_files[:k]
 
-    datasets = [FEMDataset(path) for path in npz_files]
+    # Create dataset and dataloaders
+    hist_len = int(model_cfg.node_encoder["history_len"])
+    pred_horizon = int(model_cfg.decoder["pred_horizon"])
+    datasets = [FEMDataset(path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files]
     dataset = ConcatDataset(datasets)
     total_samples = len(dataset)
     print(f"Total samples: {total_samples}")
 
+    # Split dataset
     train_size = int(split_cfg.get("train", 0.7) * total_samples)
     valid_size = int(split_cfg.get("valid", 0.2) * total_samples)
     test_size = total_samples - train_size - valid_size
@@ -95,9 +111,10 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
+    ##### Create model, optimizer, scheduler #####
     model = create_gnn_model(model_cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
     one_step_mse = torch.nn.MSELoss()
 
     num_params = sum(p.numel() for p in model.parameters())
@@ -112,6 +129,8 @@ def main():
     model_path = os.path.join(model_dir, f"gnn_recurrent_{timestamp}.pt")
 
     best_val_loss = float("inf")
+    
+    ##### Training loop #####
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
@@ -120,16 +139,13 @@ def main():
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
             # Add noise to input features during training for regularization
-            noise = torch.randn_like(batch_graphs.x) * 0.01
+            noise = 0.01 * torch.randn_like(batch_graphs.x)
             batch_graphs.x = batch_graphs.x + noise
 
             pred_seq = model(batch_graphs)  # (N_total, H, 6)
-            y_target = batch_graphs.y
-            if y_target.dim() == 2:
-                y_target = y_target.unsqueeze(1)  # (N, 1, F)
-            target_seq = y_target[:, :pred_seq.shape[1], 3:]  # (N, H, 6)
+            y_target = batch_graphs.y[:, :, 3:]  # (N, H, 6)
 
-            batch_loss = weighted_sequence_mse(pred_seq, target_seq)
+            batch_loss = weighted_sequence_mse(pred_seq, y_target)
 
             optimizer.zero_grad()
             batch_loss.backward()

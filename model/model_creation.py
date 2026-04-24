@@ -180,10 +180,12 @@ def create_gnn_model(
             msg_passing_steps=n_topo_layers,
             standard_dt=0.01,
         )
-        horizon = int(config.decoder.get("horizon", 5))
+        hist_len = int(config.node_encoder.get("history_len", 5))
+        pred_horizon = int(config.decoder.get("pred_horizon", 5))
         return EncodeDecodeGNNDirectRecurrent(
             one_step_model=one_step_model,
-            horizon=horizon,
+            pred_horizon=pred_horizon,
+            hist_len=hist_len
         )
     else: 
         return None

@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Feb 22 11:55:42 2022
-
-@author: marcomau
+@source: marcomau
+@modified: tonyho
 """
 # GNN for displacement/stress field predictions
 

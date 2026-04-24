@@ -6,9 +6,9 @@
             "save_pt": "save_model/baseline_64.pt"
         },
         {
-            "name": "GNN Contact Direct Recurrent",
-            "config": "config/gnn_contact_direct_recurrent.json",
-            "save_pt": "save_model/gnn_recurrent_20260305_010831.pt"
+            "name": "GNN Contact Direct Recurrent Linear Decay",
+            "config": "config/gnn_contact_direct_recurrent_infer.json",
+            "save_pt": "save_model/direct_recurrent_64_exp_decay.pt"
         },
         {
             "name": "GNN Contact Direct One Step",
