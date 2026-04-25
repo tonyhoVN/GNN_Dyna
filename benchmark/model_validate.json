@@ -1,0 +1,18 @@
+{
+  "config": "config/gnn_contact_direct_recurrent_infer.json",
+  "pt_files": [
+        "save_model/gnn_recurrent_20260425_023349.pt",
+        "save_model/gnn_recurrent_20260425_065032.pt",
+        "save_model/gnn_recurrent_20260425_002222.pt",
+        "save_model/gnn_recurrent_20260425_031758.pt",
+        "save_model/gnn_recurrent_20260425_085323.pt",
+        "save_model/gnn_recurrent_20260425_010549.pt",
+        "save_model/gnn_recurrent_20260425_040212.pt",
+        "save_model/gnn_recurrent_20260425_014936.pt",
+        "save_model/gnn_recurrent_20260425_051606.pt"
+  ],
+  "test_data": {
+    "start_index": 22,
+    "rollout_steps": 150
+  }
+}
