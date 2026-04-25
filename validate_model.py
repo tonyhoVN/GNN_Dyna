@@ -92,9 +92,11 @@ def main():
     npz_files = npz_files[-10:]
     hist_len = int(model_cfg.node_encoder.get("history_len", 5))
     pred_horizon = int(model_cfg.decoder.get("pred_horizon", 1))
+    geometry_path = os.path.join(data_path, "geometry_shared.npz")
+    print(f"Using geometry path: {geometry_path}")
     datasets = [
         # Let each NPZ resolve its own geometry_path when present.
-        FEMDataset(path, history_len=hist_len, predict_horizon=pred_horizon)
+        FEMDataset(path, history_len=hist_len, predict_horizon=pred_horizon, geometry_path=geometry_path)
         for path in npz_files
     ]
     dataset = ConcatDataset(datasets)
