@@ -90,7 +90,7 @@ def main() -> None:
                 f"\n=== Validation {idx}/{len(sweeps)}: "
                 f"history_len={history_len}, pred_horizon={pred_horizon} ==="
             )
-            set_history_and_horizon(config, history_len, pred_horizon)
+            set_history_and_horizon(config, history_len, 1) # Always set pred_horizon to 1 for validation, even if the model was trained with a different horizon.
             save_json(default_config_path, config)
             run_validation(
                 config_path=default_config_path,
