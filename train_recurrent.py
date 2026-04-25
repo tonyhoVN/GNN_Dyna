@@ -37,7 +37,7 @@ def load_raw_config(path: str):
         return json.load(f)
 
 
-def weighted_sequence_mse(pred_seq, target_seq):
+def weighted_sequence_mse(pred_seq, target_seq, percent):
     # pred_seq, target_seq: (N, H, C)
     horizon = pred_seq.shape[1]
     
@@ -45,10 +45,20 @@ def weighted_sequence_mse(pred_seq, target_seq):
     # weights = torch.arange(horizon, 0, -1, device=pred_seq.device, dtype=pred_seq.dtype)
 
     # Eponetial decay weights
-    tau = 0.4*horizon 
     t = torch.arange(horizon, device=pred_seq.device, dtype=pred_seq.dtype)
-    weights = torch.exp(-t / tau)  # Exponential decay
+    
+    # tau = 0.4*horizon 
+    # weights = torch.exp(-t / tau)  # Exponential decay
+
+    alpha_start = 20
+    alpha_end = 2
+    if percent < 0.8:
+        alpha = alpha_start - (alpha_start - alpha_end) * (percent / 0.8)
+    else:
+        alpha = alpha_end
+    weights = torch.exp(-alpha * (t / horizon))
     weights = weights / weights.sum()
+    
     per_h = ((pred_seq - target_seq) ** 2).mean(dim=(0, 2))  # (H,)
     return (per_h * weights).sum()
 
@@ -146,7 +156,8 @@ def main():
             pred_seq = model(batch_graphs)  # (N_total, H, 6)
             y_target = batch_graphs.y[:, :, 3:]  # (N, H, 6)
 
-            batch_loss = weighted_sequence_mse(pred_seq, y_target)
+            percent = epoch / epochs
+            batch_loss = weighted_sequence_mse(pred_seq, y_target, percent=percent)
 
             optimizer.zero_grad()
             batch_loss.backward()
