@@ -93,7 +93,8 @@ def main():
     # Create dataset and dataloaders
     hist_len = int(model_cfg.node_encoder["history_len"])
     pred_horizon = int(model_cfg.decoder["pred_horizon"])
-    datasets = [FEMDataset(path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files]
+    geometry_path = os.path.join(data_path, "geometry_shared.npz")
+    datasets = [FEMDataset(path, geometry_path=geometry_path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files]
     dataset = ConcatDataset(datasets)
     total_samples = len(dataset)
     print(f"Total samples: {total_samples}")

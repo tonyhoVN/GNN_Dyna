@@ -266,7 +266,7 @@ if __name__ == "__main__":
     args = parse_args()
     
     # Process all data folders in output/
-    output_folder = "output1"
+    output_folder = "output"
     data_folders = [
         os.path.join(root, output_folder, d)
         for d in os.listdir(os.path.join(root, output_folder))
@@ -274,14 +274,15 @@ if __name__ == "__main__":
     ]
 
     # Save geometry information
-    gnn_data_process_folder = "data1"
-    geometry_path = os.path.join(root, gnn_data_process_folder, "geometry_shared.npz")
+    gnn_data_process_folder = "data"
+    geometry_path_abs = os.path.join(root, gnn_data_process_folder, "geometry_shared.npz")
+    geometry_path_rel = os.path.join(gnn_data_process_folder, "geometry_shared.npz")
     geometry_data = build_geometry_data(data_folders[0])
-    np.savez_compressed(geometry_path, **geometry_data)
-    print(f"Geometry data saved to: {geometry_path}")
+    np.savez_compressed(geometry_path_abs, **geometry_data)
+    print(f"Geometry data saved to: {geometry_path_abs}")
 
     # Save time series information
     if not args.skip_time:
         for folder in data_folders:
             print(f"Processing time series of folder: {folder}")
-            process_gnn_data(gnn_data_process_folder, folder, geometry_path)
+            process_gnn_data(gnn_data_process_folder, folder, geometry_path_rel)
