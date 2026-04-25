@@ -7,7 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 MANIFEST_PATH = REPO_ROOT / "benchmark" / "model_validate.json"
-VALIDATE_SCRIPT = REPO_ROOT / "validate.py"
+VALIDATE_SCRIPT = REPO_ROOT / "validate_model.py"
 
 
 def load_json(path: Path) -> dict:
