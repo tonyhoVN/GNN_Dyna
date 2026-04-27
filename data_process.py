@@ -14,6 +14,12 @@ def parse_args():
         action="store_true", 
         help="Skip building temporal data"
     )
+    parser.add_argument(
+        "--keyword-file",
+        type=str,
+        default="ball_plate.k",
+        help="Name of .k file"
+    )
     parser.set_defaults(skip_time=False)
     return parser.parse_args()
 
@@ -71,9 +77,9 @@ def build_edges_gnn_from_mesh(mesh, spc_nodes):
     return edges_gnn[unique_idx], edges_attr[unique_idx]
 
 
-def build_geometry_data(data_folder: str):
+def build_geometry_data(data_folder: str, keyword_file: str):
     d3plot_path = os.path.join(data_folder, "d3plot")
-    keyword_path = os.path.join(data_folder, "ball_plate.k")
+    keyword_path = os.path.join(data_folder, keyword_file)
     cfile_path = os.path.join(root, "cfile", "element_mass_all.cfile")
     msg_path = os.path.join(root, "cfile", "lspost.msg")
 
@@ -84,6 +90,7 @@ def build_geometry_data(data_folder: str):
     # Build element to nodes and material mapping
     element_to_nodes = build_element_connectivity(mesh)
     element_to_material = build_element_material_map(mesh)
+    element_to_type = build_element_type_map(mesh)
 
     max_id = 0
     for ele in list(element_to_nodes.values()):
@@ -92,9 +99,10 @@ def build_geometry_data(data_folder: str):
     print(f"Max node id is: {max_id}")
 
     # Compute node masses
-    write_mass_cfile(cfile_path, keyword_path, element_to_nodes)
+    write_mass_cfile(cfile_path, keyword_path, element_to_type)
     run_cfile_ls_prepost(cfile_path)
     element_masses = read_element_mass_map(msg_path)
+    # breakpoint()
     node_mass, missing_elements = compute_node_masses(element_masses, element_to_nodes)
 
     print(f"Elements: {len(element_to_nodes)}")
@@ -266,6 +274,7 @@ if __name__ == "__main__":
     args = parse_args()
     
     # Process all data folders in output/
+    k_file = args.keyword_file
     output_folder = "output"
     data_folders = [
         os.path.join(root, output_folder, d)
@@ -277,7 +286,7 @@ if __name__ == "__main__":
     gnn_data_process_folder = "data"
     geometry_path_abs = os.path.join(root, gnn_data_process_folder, "geometry_shared.npz")
     geometry_path_rel = os.path.join(gnn_data_process_folder, "geometry_shared.npz")
-    geometry_data = build_geometry_data(data_folders[0])
+    geometry_data = build_geometry_data(data_folders[0], k_file)
     np.savez_compressed(geometry_path_abs, **geometry_data)
     print(f"Geometry data saved to: {geometry_path_abs}")
 

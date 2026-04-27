@@ -23,10 +23,10 @@ Generate data manual
 Generate data automate 
 ----------------
 1. Run the solver to obtain data 
-   `python -m create_dataset --num-runs 10`
+   `python -m create_dataset --num-runs 10 --keyword-file ball_plate.k`
 
 2. Post-process and save dataset for training
-   `python -m data_process`
+   `python -m data_process --keyword-file ball_plate.k`
 
 
 Training 
@@ -49,7 +49,7 @@ Rollout Animation Test
    `python animate_rollout_prediction.py  --config config\gnn_contact_direct_no_acc.json --model-path save_model\gnn_general_20260303_120856.pt --npz-path data\20260302_133424_time_data.npz --interval-ms 200 --start-index 20 --rollout-steps 50`
 
 - Bench mark with base-line and 1 step prediction model 
-   `python benchmark.py --benchmark-config benchmark\rollout_benchmark.json`
+   `python benchmark.py --benchmark-config benchmark\rollout_benchmark.json --plate-node-count 289`
 
 
 

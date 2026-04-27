@@ -29,6 +29,13 @@ def parse_args():
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Torch device.",
     )
+    parser.add_argument(
+        "--plate-node-count",
+        type=int,
+        default=289,
+        help="Number of plate nodes in the dataset (used to separate plate vs ball nodes for error metrics).",
+    )
+
     return parser.parse_args()
 
 
@@ -51,6 +58,10 @@ def expand_dt(graph):
 def predict_next_state(mode, model, graph, x_hist):
     graph.x = x_hist
     x_last = x_hist[:, :, -1]
+    
+    t0 = time.perf_counter() # Start time
+    t1 = time.perf_counter() # End time (after inference)
+    next_state = None
 
     if mode in ("one_step_prediction", "recurrent_prediction"):
         graph.pos = x_hist[:, 6:9, -1] + graph.x_initial
@@ -58,28 +69,36 @@ def predict_next_state(mode, model, graph, x_hist):
 
     if mode == "baseline":
         vu_next = model(graph)  # (N,6)
+        t1 = time.perf_counter()
         next_state = x_last.clone()
         next_state[:, 3:] = vu_next
-        return next_state
 
-    if mode == "one_step_prediction":
+    elif mode == "one_step_prediction":
         pred = model(graph)
+        t1 = time.perf_counter()
         if pred.shape[1] == x_last.shape[1]:
-            return pred
+            next_state = pred
         if pred.shape[1] == x_last.shape[1] - 3:
             next_state = x_last.clone()
             next_state[:, 3:] = pred
-            return next_state
-        raise ValueError(f"Unsupported one-step output shape: {tuple(pred.shape)}")
+        # raise ValueError(f"Unsupported one-step output shape: {tuple(pred.shape)}")
 
-    if mode == "recurrent_prediction":
+    elif mode == "recurrent_prediction":
         pred_seq = model(graph)  # (N, H, 6)
+        t1 = time.perf_counter()
         vu_next = pred_seq[:, 0, :]
         next_state = x_last.clone()
         next_state[:, 3:] = vu_next
-        return next_state
+        # return next_state
+    
+    else:
+        raise ValueError(f"Unknown model mode: {mode}")
 
-    raise ValueError(f"Unknown model mode: {mode}")
+    if next_state is None:
+        raise ValueError(f"Could not determine next state from model output with shape: {tuple(pred.shape)}")
+    
+    predict_time = t1 - t0
+    return next_state, predict_time
 
 
 def rollout_positions(model, mode, dataset, start_index, rollout_steps, device):
@@ -101,9 +120,8 @@ def rollout_positions(model, mode, dataset, start_index, rollout_steps, device):
             gt_positions.append((x_initial.detach().cpu() + gt_y[:, 6:9]).numpy())
 
             graph_in = dataset[idx].to(device)
-            t0 = time.perf_counter()
-            next_state = predict_next_state(mode, model, graph_in, x_hist)
-            total_predict_time += time.perf_counter() - t0
+            next_state, predict_time = predict_next_state(mode, model, graph_in, x_hist)
+            total_predict_time += predict_time
             pred_positions.append((x_initial + next_state[:, 6:9]).detach().cpu().numpy())
 
             x_hist = torch.cat([x_hist[:, :, 1:], next_state.unsqueeze(-1)], dim=2)
@@ -235,7 +253,7 @@ def plot_benchmark_curves(all_metrics_by_model, output_png):
     plt.subplot(1, 4, 2)
     _plot_metric_subplot(
         metric_key="mae_plate",
-        metric_title="Plate MAE (Nodes 0:289, Mean +/- Std)",
+        metric_title=f"Plate MAE (Mean +/- Std)",
         ylabel="Position MAE",
         all_metrics_by_model=all_metrics_by_model,
     )
@@ -383,9 +401,10 @@ def main():
     best_file_rollouts = {}
     best_file_path = None
     best_score = float("inf")
+    geometry_path = os.path.join(root, test_cfg["data_dir"], "geometry_shared.npz")
 
     for i, npz_path in enumerate(files):
-        dataset = FEMDataset(npz_path)
+        dataset = FEMDataset(npz_path, geometry_path=geometry_path, history_len=5, predict_horizon=1)
         max_steps = len(dataset) - start_index
         rollout_steps = min(rollout_steps_cfg, max_steps)
         if rollout_steps <= 0:
@@ -398,7 +417,7 @@ def main():
             gt_pos, pred_pos, x0, avg_step_time = rollout_positions(
                 model, mode, dataset, start_index, rollout_steps, device
             )
-            curves = compute_error_curves(gt_pos, pred_pos, plate_node_count=289)
+            curves = compute_error_curves(gt_pos, pred_pos, plate_node_count=args.plate_node_count)
             for k in metric_keys:
                 all_metrics[model_name][k].append(curves[k])
             time_stats[model_name]["total_time"] += avg_step_time * rollout_steps

@@ -1,5 +1,5 @@
 bgstyle plain
-openc keyword "D:\Projects_code\ball_plate\output1\test_data\ball_plate.k"
+openc keyword "D:\Projects_code\ball_plate\output\20260426_213302\camry_hood.k"
 ident select 1
 genselect target node
 genselect node add setnode 1

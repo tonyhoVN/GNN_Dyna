@@ -13,6 +13,9 @@ _MASS_LINE_RE = re.compile(
 )
 
 REAL_EDGES = {
+    "TriShell3": [
+        (0,1), (1,2), (2,0)
+    ],
     "QuadShell4": [
         (0,1), (1,2), (2,3), (3,0)
     ],
@@ -122,7 +125,17 @@ def build_element_material_map(mesh):
     element_to_material = dict(sorted(element_to_material.items(), key=lambda x: x[0]))
     return element_to_material
 
-def write_mass_cfile(output_path: str, keyword_path: str, element_to_nodes):
+def build_element_type_map(mesh):
+    element_to_type = {}
+    for element in mesh.elements:
+        etype = str(element.type).split(".")[-1]  # e.g. element_types.Hex8 -> "Hex8"
+        element_to_type[int(element.id)] = etype
+
+    # Sort by element index
+    element_to_type = dict(sorted(element_to_type.items(), key=lambda x: x[0]))
+    return element_to_type
+
+def write_mass_cfile(output_path: str, keyword_path: str, element_to_type: Dict[int, str]):
     lines = [
         "bgstyle plain",
         f'openc keyword "{keyword_path}"',
@@ -133,12 +146,12 @@ def write_mass_cfile(output_path: str, keyword_path: str, element_to_nodes):
         "",
         "$# --- list of element IDs you want ---",
     ]
-    for element_id, node_ids in element_to_nodes.items():
-        if len(node_ids) == 8:
+    for element_id, etype in element_to_type.items():
+        if etype == "Hex8" or etype == "Tet4":
             lines.append(f"genselect element add solid {element_id}")
-        if len(node_ids) == 4:
+        if etype == "QuadShell4" or etype == "TriShell3" or etype == "Shell4":
             lines.append(f"genselect element add shell {element_id}")
-        if len(node_ids) == 2:
+        if etype == "Line2" or etype == "Beam3":
             lines.append(f"genselect element add beam {element_id}")
         lines.append("genselect unsel")
     lines.append("exit")
@@ -243,7 +256,12 @@ def get_nodes_mass():
     
     return node_mass, missing_elements
 
-def translate_model(keyword_path: str = None, output_path: str = None):
+def translate_model(
+        keyword_path: str = None, 
+        output_path: str = None,
+        lb: List[float] = [-50, -50, 0],
+        ub: List[float] = [50, 50, 20],
+    ):
     import random
     dir_file = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(dir_file)
@@ -253,10 +271,10 @@ def translate_model(keyword_path: str = None, output_path: str = None):
     cfile_path = os.path.join(root, "cfile", "translate.cfile")
 
     # Random translation (units = model units)
-    x = random.uniform(-50, 50)
-    y = random.uniform(-50, 50)
-    # z = random.uniform(0, 20)
-    z = 0.0
+    x = random.uniform(lb[0], ub[0])
+    y = random.uniform(lb[1], ub[1])
+    z = random.uniform(lb[2], ub[2])
+    # z = 0.0
 
     write_translate_cfile(
         output_path=cfile_path,

@@ -39,6 +39,13 @@ def parse_args():
         help="Memory in MB"
     )
 
+    parser.add_argument(
+        "--keyword-file",
+        type=str,
+        default="ball_plate.k",
+        help="Path to the LS-DYNA keyword file to use as input. If not provided, a default ball_plate.k will be used."
+    )
+
     return parser.parse_args()
 
 
@@ -46,7 +53,7 @@ if __name__ == "__main__":
     args = parse_args()
 
     root = os.path.dirname(os.path.abspath(__file__))
-    keyword_path = os.path.join(root, "output", "ball_plate.k")
+    keyword_path = os.path.join(root, "output", args.keyword_file)
 
     solver = args.solver
     ncpu = args.ncpu
@@ -59,8 +66,10 @@ if __name__ == "__main__":
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = os.path.join(root, "output", f"{timestamp}")
         os.makedirs(run_dir, exist_ok=True)
-        modify_keyword_path = os.path.join(run_dir, "ball_plate.k")
-        translate_model(keyword_path=keyword_path, output_path=modify_keyword_path)
+        modify_keyword_path = os.path.join(run_dir, args.keyword_file)
+        lb = [-250, -450, 0]
+        ub = [250, 450, 0]
+        translate_model(keyword_path=keyword_path, output_path=modify_keyword_path, lb=lb, ub=ub)
 
         # run simulation
         run_dyna(ls_solver=solver, k_file=modify_keyword_path, ncpu=ncpu, memory=memory)
