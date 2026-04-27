@@ -98,29 +98,41 @@ def main():
     percent = float(data_cfg.get("percent", 100))
     k = max(1, int(len(npz_files) * (percent / 100.0)))
     # npz_files = random.sample(npz_files, k)
-    npz_files = npz_files[:k]
+    train_num = int(float(split_cfg["train"])*k)
+    valid_num = int(float(split_cfg["valid"])*k)
+    npz_files_train = npz_files[:train_num]
+    npz_files_valid = npz_files[train_num:train_num+valid_num] # Use remaining files for validation (if any)
 
     # Create dataset and dataloaders
     hist_len = int(model_cfg.node_encoder["history_len"])
     pred_horizon = int(model_cfg.decoder["pred_horizon"])
     geometry_path = os.path.join(data_path, "geometry_shared.npz")
-    datasets = [FEMDataset(path, geometry_path=geometry_path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files]
-    dataset = ConcatDataset(datasets)
-    total_samples = len(dataset)
-    print(f"Total samples: {total_samples}")
 
+    # datasets = [FEMDataset(path, geometry_path=geometry_path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files]
+    # dataset = ConcatDataset(datasets)
+    # total_samples = len(dataset)
+    
     # Split dataset
-    train_size = int(split_cfg.get("train", 0.7) * total_samples)
-    valid_size = int(split_cfg.get("valid", 0.2) * total_samples)
-    test_size = total_samples - train_size - valid_size
-    train_dataset, valid_dataset, _ = random_split(
-        dataset,
-        [train_size, valid_size, test_size],
-        generator=torch.Generator().manual_seed(seed),
-    )
+    # train_size = int(split_cfg.get("train", 0.7) * total_samples)
+    # valid_size = int(split_cfg.get("valid", 0.2) * total_samples)
+    # test_size = total_samples - train_size - valid_size
+    # train_dataset, valid_dataset, _ = random_split(
+    #     dataset,
+    #     [train_size, valid_size, test_size],
+    #     generator=torch.Generator().manual_seed(seed),
+    # )
+    # train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
+    datasets_train = [FEMDataset(path, geometry_path=geometry_path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files_train]
+    dataset_train = ConcatDataset(datasets_train)
+    print(f"Total training samples: {len(dataset_train)}")
+    datasets_valid = [FEMDataset(path, geometry_path=geometry_path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files_valid]
+    dataset_valid = ConcatDataset(datasets_valid)
+    print(f"Total validation samples: {len(dataset_valid)}")
+
+    train_loader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True)
+    valid_loader = DataLoader(dataset_valid, batch_size=batch_size, shuffle=False)
 
     ##### Create model, optimizer, scheduler #####
     model = create_gnn_model(model_cfg).to(device)

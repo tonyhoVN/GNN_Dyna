@@ -2,7 +2,7 @@
   "data": {
     "data_dir": "data",
     "file_glob": "*time_data.npz",
-    "percent": 50
+    "percent": 10
   },
   "split": {
     "train": 0.85,

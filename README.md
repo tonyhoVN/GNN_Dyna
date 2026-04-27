@@ -33,7 +33,7 @@ Training
 ----------------
 Load data and train recurrent model
    `python train_recurrent.py --config config/gnn_contact_direct_recurrent.json`
-   `python train_force.py --config config/contact_gnn_force.json`
+   <!-- `python train_force.py --config config/contact_gnn_force.json` -->
 
 For standard baseline residual gnn
    `python train_baseline.py --config config/gnn_contact_general.json`
