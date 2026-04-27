@@ -28,6 +28,7 @@ save_model/
 train_log/
 images/
 temp/
+cfile/
 
 .idea/
 .vscode/
