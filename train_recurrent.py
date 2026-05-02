@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import random
 from datetime import datetime
@@ -14,15 +15,18 @@ from model.model_creation import ModelConfig, create_gnn_model
 from utils.data_loader import FEMDataset
 
 
-seed = 42
-random.seed(seed)
-torch.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
+def set_seed(seed: int):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train recurrent GNN from JSON config")
     parser.add_argument("--config", type=str, default="config/gnn_contact_direct_recurrent.json", help="Path to config JSON")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for dataset shuffling and model init")
     parser.add_argument("--epochs", type=int, default=None, help="Override epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     parser.add_argument("--learning-rate", type=float, default=None, help="Override learning rate")
@@ -65,6 +69,7 @@ def weighted_sequence_mse(pred_seq, target_seq, percent):
 
 def main():
     args = parse_args()
+    set_seed(args.seed)
     raw = load_raw_config(args.config)
 
     # Extract config values with command-line overrides
@@ -95,8 +100,8 @@ def main():
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
 
     # Subsample files
-    percent = float(data_cfg.get("percent", 100))
-    k = max(1, int(len(npz_files) * (percent / 100.0)))
+    percent = float(data_cfg.get("percent", 100) / 100.0)
+    k = min(max(1, math.ceil(len(npz_files) * percent)), len(npz_files))
     # npz_files = random.sample(npz_files, k)
     train_num = int(float(split_cfg["train"])*k)
     valid_num = int(float(split_cfg["valid"])*k)
@@ -131,14 +136,16 @@ def main():
     dataset_valid = ConcatDataset(datasets_valid)
     print(f"Total validation samples: {len(dataset_valid)}")
 
-    train_loader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(dataset_valid, batch_size=batch_size, shuffle=False)
+    train_generator = torch.Generator().manual_seed(args.seed)
+    valid_generator = torch.Generator().manual_seed(args.seed)
+    train_loader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, generator=train_generator)
+    valid_loader = DataLoader(dataset_valid, batch_size=batch_size, shuffle=False, generator=valid_generator)
 
     ##### Create model, optimizer, scheduler #####
     model = create_gnn_model(model_cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
-    one_step_mse = torch.nn.MSELoss()
+    one_step_mae = torch.nn.L1Loss()
 
     num_params = sum(p.numel() for p in model.parameters())
     num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -190,7 +197,7 @@ def main():
                 y_target = batch_graphs.y
                 if y_target.dim() == 3:
                     y_target = y_target[:, 0, :]
-                val_loss += one_step_mse(pred_seq[:, 0, :], y_target[:, 3:]).item()
+                val_loss += one_step_mae(pred_seq[:, 0, :], y_target[:, 3:]).item()
 
         avg_val_loss = val_loss / max(len(valid_loader), 1)
         scheduler.step()

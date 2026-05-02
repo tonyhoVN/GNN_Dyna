@@ -132,7 +132,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, 
-        T_max=100, 
+        T_max=epochs, 
         eta_min=1e-5
     )
     loss = torch.nn.MSELoss()

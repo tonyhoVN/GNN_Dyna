@@ -15,6 +15,10 @@ from utils.data_loader import GraphData, FEMDataset
 from model.GNN import EncodeDecodeGNN
 from model.model_creation import ModelConfig, create_gnn_model
 import random
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+from scipy.stats import qmc
+
 
 random.seed(42)
 # x = torch.randn((2,100,10,3))
@@ -106,11 +110,79 @@ if __name__ == "__main__":
     # _ = pl.add_axes_at_origin()
     # pl.show()
 
-    horizon = 8
+    # horizon = 8
 
-    t = torch.arange(horizon)
+    # t = torch.arange(horizon)
 
-    tau = 0.4*horizon  # more reasonable scale for H=5
-    weights = torch.exp(-t / tau)
-    weights = weights / weights.sum()
-    print(weights)
+    # tau = 0.4*horizon  # more reasonable scale for H=5
+    # weights = torch.exp(-t / tau)
+    # weights = weights / weights.sum()
+    # print(weights)
+
+    # XY = []
+    # for _ in range(50):
+    #     x = random.uniform(-250, 250)
+    #     y = random.uniform(-450, 450)
+    #     XY.append((x, y))
+    # XY = np.array(XY)
+    
+    # # Số điểm
+    # n_samples = 30
+
+    # # Khởi tạo LHS cho 2 chiều (x, y)
+    # sampler = qmc.LatinHypercube(d=2)
+
+    # # Sample trong [0,1]
+    # sample = sampler.random(n=n_samples)
+
+    # # Scale về khoảng mong muốn
+    # l_bounds = [-250, -450]
+    # u_bounds = [250, 450]
+
+    # scaled_sample = qmc.scale(sample, l_bounds, u_bounds)
+
+    # # Tách x, y
+    # x = scaled_sample[:, 0]
+    # y = scaled_sample[:, 1]
+
+    # plt.scatter(x, y)
+    # plt.show()
+
+    horizon = 5
+    t = np.linspace(0, horizon + 1, num=300)
+    percent = np.linspace(0, 1, num=5)
+    alpha_start = 20
+    alpha_end = 2
+    alphas = alpha_start - (alpha_start - alpha_end) * (percent / 0.8)
+
+    blues = ['#1a5fa8', '#3e8ecb', '#6aabdc', '#95c7e8', '#b8d9ee']
+    dashes = ['-', '--', '-.', (0,(5,2)), (0,(2,2))]
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+
+    for i, alpha in enumerate(alphas):
+        weights = np.exp(-alpha * (t / horizon))
+        ax.plot(t, weights, color=blues[i], linestyle=dashes[i],
+                linewidth=2.0 if i == 0 else 1.6,
+                label=f'α = {alpha:.1f}')
+
+    ax.set_xlabel('Time step $t$', fontsize=13)
+    ax.set_ylabel('Weight $w(t)$', fontsize=13)
+    ax.set_title('Adaptive Exponential Decay Weights', fontsize=14, fontweight='normal', pad=12)
+
+    ax.set_xlim(0, horizon + 1)
+    ax.set_ylim(0, 1.05)
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(0.2))
+    ax.tick_params(labelsize=11)
+
+    ax.grid(True, color='#e0e0e0', linewidth=0.7, linestyle='-')
+    ax.set_axisbelow(True)
+    ax.spines[['top', 'right']].set_visible(False)
+
+    ax.legend(fontsize=11, frameon=True, framealpha=0.9,
+            edgecolor='#cccccc', loc='upper right')
+
+    plt.tight_layout()
+    plt.savefig('images/decay_weights.png', dpi=600, bbox_inches='tight')
+    plt.show()

@@ -1,19 +1,19 @@
 {
     "models": [
         {
-            "name": "Baseline",
+            "name": "General GNN",
             "config": "config/base_line.json",
             "save_pt": "save_model/baseline_64.pt"
         },
         {
-            "name": "GNN Contact Direct Recurrent Linear Decay",
+            "name": "MeshGraphNet",
             "config": "config/gnn_contact_direct_recurrent_infer.json",
-            "save_pt": "save_model/direct_recurrent_64_exp_decay.pt"
+            "save_pt": "save_model/recurrent_h5_p1_exp.pt"
         },
         {
-            "name": "GNN Contact Direct One Step",
-            "config": "config/gnn_contact_direct_no_acc.json",
-            "save_pt": "save_model/direct_one_step_64.pt"
+            "name": "Ours",
+            "config": "config/gnn_contact_direct_recurrent_infer.json",
+            "save_pt": "save_model/recurrent_h5_p5_adapt_exp.pt"
         }
     ],
     "metrics": [
@@ -21,27 +21,15 @@
             "name": "Position MAE",
             "type": "mae",
             "target": "position"
-        },
-        {
-            "name": "Maximum Position Error",
-            "type": "max",
-            "target": "position"
         }
     ], 
     "test_data": {
-        "data_dir": "data",
+        "data_dir": "data1",
+        "geometry_path": "geometry_shared.npz",
         "file_glob": [
-            "20260302_133411_time_data.npz",
-            "20260302_133415_time_data.npz",
-            "20260302_133419_time_data.npz",
-            "20260302_133424_time_data.npz",
-            "20260302_133428_time_data.npz",
-            "20260302_133433_time_data.npz",
-            "20260302_133437_time_data.npz", 
-            "20260302_133441_time_data.npz", 
-            "20260302_133446_time_data.npz"
+            "20260302_133225_time_data.npz"
         ],
-        "interval_ms": 100,
+        "interval_ms": 50,
         "start_index": 22,
         "rollout_steps": 150
     }
