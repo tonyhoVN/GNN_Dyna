@@ -10,8 +10,13 @@ from model.GNN import (
     EncodeDecodeGNNDirect,
     EncodeDecodeGNNDirectRecurrent,
     EdgeEncoder,
+    TopologyEdgeEncoder,
+    SurfaceEdgeEncoder,
     GRUResidualDecoder,
 )
+
+from model.model_buckling1 import EncodeProcessDecode
+
 from model.message_passing_gnn import (
     MLP,
     GraphNetBlock,
@@ -77,18 +82,10 @@ def create_gnn_model(
 
     # Edge encoder (material id embedding + numeric features)
     edge_feat_dim = int(config.edge_encoder.get("feat_dim", 2))
-    numeric_dim = max(edge_feat_dim - 1, 0)
-    # edge_encoder = EdgeEncoder(
-    #     num_materials=num_materials,
-    #     mat_emb_dim=mat_emb_dim,
-    #     numeric_dim=numeric_dim,
-    #     out_dim=hidden_dim,
-    #     layer_norm=bool(config.edge_encoder.get("layer_norm", True))
-    # )
-    edge_en_layer = [edge_feat_dim, hidden_dim, hidden_dim]
-    edge_encoder = MLP(
-        edge_en_layer, 
-        layer_norm=bool(config.edge_encoder.get("layer_norm", False))
+    edge_encoder = TopologyEdgeEncoder(
+        edge_feat_dim=edge_feat_dim,
+        hidden_dim=hidden_dim,
+        layer_norm=bool(config.edge_encoder.get("layer_norm", False)),
     )
 
     # Topo message-passing layers
@@ -122,14 +119,21 @@ def create_gnn_model(
     # Surface message-passing layer (single block)
     surface_enabled = bool(config.gnn_surface.get("enabled", True))
     layers_surface: Optional[nn.Module]
+    surface_edge_encoder: Optional[nn.Module]
     distance_threshold = float(config.gnn_surface.get("distance_threshold", 20.0))
     if surface_enabled:
+        surface_edge_cfg = config.gnn_surface.get("edge_encoder", {})
+        surface_edge_encoder = SurfaceEdgeEncoder(
+            hidden_dim=hidden_dim,
+            threshold=float(surface_edge_cfg.get("distance_threshold", distance_threshold)),
+            layer_norm=bool(surface_edge_cfg.get("layer_norm", config.gnn_surface.get("layer_norm", False))),
+        )
         layers_surface = GraphNetSurfaceBlock(
             hidden_dim=hidden_dim,
-            threshold=distance_threshold,
             layer_norm=bool(config.gnn_surface.get("layer_norm", False))    
         )
     else:
+        surface_edge_encoder = None
         layers_surface = None
 
     # Node decoder
@@ -148,7 +152,8 @@ def create_gnn_model(
             layers_topo,
             layers_surface,
             node_decoder,
-            msg_passing_steps=n_topo_layers
+            msg_passing_steps=n_topo_layers,
+            surface_edge_encoder=surface_edge_encoder
         )
     elif config.type == "integration":
         return EncodeDecodeGNNIntegration(
@@ -158,7 +163,8 @@ def create_gnn_model(
             layers_surface,
             node_decoder,
             msg_passing_steps=n_topo_layers,
-            standard_dt=0.01
+            standard_dt=0.01,
+            surface_edge_encoder=surface_edge_encoder
         )
     elif config.type == "direct":
         return EncodeDecodeGNNDirect(
@@ -168,7 +174,8 @@ def create_gnn_model(
             layers_surface,
             node_decoder,
             msg_passing_steps=n_topo_layers,
-            standard_dt=0.01
+            standard_dt=0.01,
+            surface_edge_encoder=surface_edge_encoder
         )
     elif config.type == "direct_recurrent":
         one_step_model = EncodeDecodeGNNDirect(
@@ -179,6 +186,7 @@ def create_gnn_model(
             node_decoder,
             msg_passing_steps=n_topo_layers,
             standard_dt=0.01,
+            surface_edge_encoder=surface_edge_encoder,
         )
         hist_len = int(config.node_encoder.get("history_len", 5))
         pred_horizon = int(config.decoder.get("pred_horizon", 5))
@@ -187,6 +195,15 @@ def create_gnn_model(
             pred_horizon=pred_horizon,
             hist_len=hist_len
         )
+    elif config.type == "baseline":
+        return EncodeProcessDecode(
+            node_feat_size = config.node_encoder.get("feat_dim", 6),
+            output_size = config.decoder.get("out_dim", 9),
+            latent_size = config.hidden_dim,
+            edge_feat_size = config.edge_encoder.get("feat_dim", 2),
+            message_passing_steps = config.gnn_topology.get("n_gnn_layers", 5)
+        )
+
     else: 
         return None
 

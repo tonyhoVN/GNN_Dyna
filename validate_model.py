@@ -90,7 +90,7 @@ def main():
     if not npz_files:
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
     npz_files = npz_files[-10:]
-    hist_len = int(model_cfg.node_encoder.get("history_len", 5))
+    hist_len = int(model_cfg.node_encoder.get("history_len", 1))
     pred_horizon = int(model_cfg.decoder.get("pred_horizon", 1))
     geometry_path = os.path.join(data_path, "geometry_shared.npz")
     print(f"Using geometry path: {geometry_path}")
@@ -106,7 +106,8 @@ def main():
     valid_loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
     model = create_gnn_model(model_cfg).to(device)
-    one_step_mse = torch.nn.MSELoss()
+    mse_loss = torch.nn.MSELoss()
+    mae_loss = torch.nn.L1Loss()
 
     num_params = sum(p.numel() for p in model.parameters())
     num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -131,7 +132,7 @@ def main():
                 y_target = y_target[:, 0, :]
 
             one_step_pred = pred_seq[:, 0, :] if pred_seq.dim() == 3 else pred_seq
-            one_step_loss_sum += one_step_mse(one_step_pred, y_target[:, 3:]).item()
+            one_step_loss_sum += torch.norm(one_step_pred - y_target[:, 3:], dim=1).mean().item()
             valid_items += 1
 
     # breakpoint()
@@ -162,6 +163,7 @@ def main():
                 gt_pos = x_initial + gt_y[:, 6:9]
                 pred_pos = x_initial + next_state[:, 6:9]
                 step_err = torch.norm(pred_pos - gt_pos, dim=1).mean()
+                # step_err = mae_loss(pred_pos, gt_pos)
                 series_rollout_err += step_err.item()
 
                 x_hist = torch.cat([x_hist[:, :, 1:], next_state.unsqueeze(-1)], dim=2)
@@ -175,8 +177,8 @@ def main():
     avg_one_step_loss = one_step_loss_sum / max(valid_items, 1)
     avg_rollout_loss = sum(rollout_series_losses) / max(len(rollout_series_losses), 1)
 
-    print(f"Val-loss(one-step): {avg_one_step_loss:.6f}")
-    print(f"Val-loss(rollout): {avg_rollout_loss:.6f}")
+    print(f"RMSE Val-loss(one-step): {avg_one_step_loss:.6f}")
+    print(f"RMSE Val-loss(rollout): {avg_rollout_loss:.6f}")
 
 
 if __name__ == "__main__":

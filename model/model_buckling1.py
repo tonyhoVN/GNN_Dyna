@@ -13,6 +13,32 @@ import functools
 import collections
 from torch_geometric.data import Data
 
+class EdgeEncoder(torch.nn.Module):
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.mlp = Sequential(Linear(8, self.hidden_dim),
+                         ReLU(),
+                         Linear(self.hidden_dim,self.hidden_dim),
+                         ReLU(),
+                         LayerNorm(self.hidden_dim))    
+
+    def forward(self, pos0: torch.Tensor, pos: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        if edge_index is None or edge_index.numel() == 0:
+            return pos.new_zeros((0, self.hidden_dim))
+
+        src, dst = edge_index[0], edge_index[1]
+
+        r0 = pos0[dst] - pos0[src]
+        d0 = torch.norm(r0, dim=-1, keepdim=True)
+        r0_hat = r0 / (d0 + 1e-8)
+
+        r = pos[dst] - pos[src]
+        d = torch.norm(r, dim=-1, keepdim=True)
+        r_hat = r / (d + 1e-8)
+
+        return self.mlp(torch.cat([r0_hat, d0, r_hat, d], dim=-1))
+
 class GraphNetBlock(MessagePassing):
     """Message passing."""
     
@@ -90,11 +116,7 @@ class EncodeProcessDecode(torch.nn.Module):
                          LayerNorm(self._latent_size))               
                
         # Encoding net (MLP) for edge_features
-        self.edge_encode_net = Sequential(Linear(self._edge_feat_size,self._latent_size),
-                         ReLU(),
-                         Linear(self._latent_size,self._latent_size),
-                         ReLU(),
-                         LayerNorm(self._latent_size))              
+        self.edge_encode_net = EdgeEncoder(self._latent_size)            
         
         # Decoding net (MLP) for node_features (output)
         # ND: "Node features Decoding"
@@ -112,13 +134,14 @@ class EncodeProcessDecode(torch.nn.Module):
         # x = graph.node_features
         # edge = graph.edge_features
         x = graph.x[:,3:,-1]
-        edge = graph.edge_attr
+        # edge = graph.edge_attr
         
         # Encoding node features
         node_latents = self.node_encode_net(x)          
         
         # Encoding edge features
-        edge_latents = self.edge_encode_net(edge)        
+        # edge_latents = self.edge_encode_net(edge)    
+        edge_latents = self.edge_encode_net(graph.x_initial, graph.pos, edge_index)    
        
         # latent_graph = Graph(edge_index, node_latents, edge_latents)
         # latent_graph = Data(edge_index = edge_index, x = node_latents, edge_attr = edge_latents)                

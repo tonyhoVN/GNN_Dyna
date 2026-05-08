@@ -270,6 +270,8 @@ def translate_model(
     save_keyword_path = output_path
     cfile_path = os.path.join(root, "cfile", "translate.cfile")
 
+    random.seed(10)
+
     # Random translation (units = model units)
     x = random.uniform(lb[0], ub[0])
     y = random.uniform(lb[1], ub[1])

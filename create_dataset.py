@@ -67,8 +67,8 @@ if __name__ == "__main__":
         run_dir = os.path.join(root, "output", f"{timestamp}")
         os.makedirs(run_dir, exist_ok=True)
         modify_keyword_path = os.path.join(run_dir, args.keyword_file)
-        lb = [-250, -450, 0]
-        ub = [250, 450, 0]
+        lb = [-200, -400, 0]
+        ub = [200, 0, 0]
         translate_model(keyword_path=keyword_path, output_path=modify_keyword_path, lb=lb, ub=ub)
 
         # run simulation

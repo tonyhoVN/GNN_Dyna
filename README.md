@@ -38,6 +38,11 @@ Load data and train recurrent model
 For standard baseline residual gnn
    `python train_baseline.py --config config/gnn_contact_general.json`
 
+
+Validation
+----------------
+
+
 Test
 ------
 `python test_meshgraphnet_prediction.py --model_path model\meshgraphnet_20260122_103348.pt --npz_path data\20260122_094307_gnn_data.npz --sample_index 30`

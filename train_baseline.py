@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 from datetime import datetime
 from glob import glob
@@ -10,13 +11,9 @@ from tqdm import tqdm
 from model.model_buckling1 import EncodeProcessDecode
 from utils.data_loader import FEMDataset
 from model.model_creation import ModelConfig, create_gnn_model
-import wandb
+# import wandb
 import random
 
-seed = 42
-random.seed(seed)
-torch.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train GNN from JSON config")
@@ -28,6 +25,7 @@ def parse_args():
     parser.add_argument("--save-every", type=int, default=None, help="Override save-every")
     parser.add_argument("--data-dir", type=str, default=None, help="Override data dir")
     parser.add_argument("--file-glob", type=str, default=None, help="Override file glob")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument(
         "--log-wandb", 
         dest="log_wandb", 
@@ -47,6 +45,10 @@ def main():
     args = parse_args()
     root = os.getcwd()
     raw = load_raw_config(args.config)
+
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
 
     data_cfg = raw.get("data", {})
     split_cfg = raw.get("split", {"train": 0.7, "valid": 0.2, "test": 0.1})
@@ -71,49 +73,54 @@ def main():
 
     ## Start wandb
     run = None
-    if args.log_wandb:
-        run = wandb.init(
-            entity="tonyho-stony-brook-university",
-            project="Physics-informed Graph neural net",
-            config={
-                "learning_rate": learning_rate,
-                "batch_size": batch_size,
-                "hidden_dim": model_cfg.hidden_dim,
-                "architecture": "BaseLine Residual GNN",
-                "dataset": "LSDyna",
-                "epochs": epochs,
-                "timestamp": timestamp,
-                "config_path": args.config,
-            },
-        )
+    # if args.log_wandb:
+    #     run = wandb.init(
+    #         entity="tonyho-stony-brook-university",
+    #         project="Physics-informed Graph neural net",
+    #         config={
+    #             "learning_rate": learning_rate,
+    #             "batch_size": batch_size,
+    #             "hidden_dim": model_cfg.hidden_dim,
+    #             "architecture": "BaseLine Residual GNN",
+    #             "dataset": "LSDyna",
+    #             "epochs": epochs,
+    #             "timestamp": timestamp,
+    #             "config_path": args.config,
+    #         },
+    #     )
 
     ## Load dataset
+    ##### Load dataset #####
     data_path = os.path.join(root, data_dir)
     npz_files = sorted(glob(os.path.join(data_path, file_glob)))
     if not npz_files:
         raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
 
-    # load 50%
-    percent = float(data_cfg.get("percent", 100))
-    k = int(len(npz_files)*(percent/100.0))
-    npz_files = random.sample(npz_files, k)
+    # Subsample files
+    percent = float(data_cfg.get("percent", 100) / 100.0)
+    k = min(max(1, math.ceil(len(npz_files) * percent)), len(npz_files))
+    # npz_files = random.sample(npz_files, k)
+    train_num = int(float(split_cfg["train"])*k)
+    valid_num = int(float(split_cfg["valid"])*k)
+    npz_files_train = npz_files[:train_num]
+    npz_files_valid = npz_files[train_num:train_num+valid_num] # Use remaining files for validation (if any)
 
-    datasets = [FEMDataset(path) for path in npz_files]
-    dataset = ConcatDataset(datasets)
-    total_samples = len(dataset)
-    print(f"Total samples: {total_samples}")
+    # Create dataset and dataloaders
+    hist_len = int(model_cfg.node_encoder.get("history_len", 1))
+    pred_horizon = int(model_cfg.decoder.get("pred_horizon", 1))
+    geometry_path = os.path.join(data_path, "geometry_shared.npz")
+    
+    datasets_train = [FEMDataset(path, geometry_path=geometry_path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files_train]
+    dataset_train = ConcatDataset(datasets_train)
+    print(f"Total training samples: {len(dataset_train)}")
+    datasets_valid = [FEMDataset(path, geometry_path=geometry_path, history_len=hist_len, predict_horizon=pred_horizon) for path in npz_files_valid]
+    dataset_valid = ConcatDataset(datasets_valid)
+    print(f"Total validation samples: {len(dataset_valid)}")
 
-    train_size = int(split_cfg.get("train", 0.7) * total_samples)
-    valid_size = int(split_cfg.get("valid", 0.2) * total_samples)
-    test_size = total_samples - train_size - valid_size
-    train_dataset, valid_dataset, _ = random_split(
-        dataset,
-        [train_size, valid_size, test_size],
-        generator=torch.Generator().manual_seed(42),
-    )
-
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
+    train_generator = torch.Generator().manual_seed(args.seed)
+    valid_generator = torch.Generator().manual_seed(args.seed)
+    train_loader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, generator=train_generator)
+    valid_loader = DataLoader(dataset_valid, batch_size=batch_size, shuffle=False, generator=valid_generator)
 
     ## Create training model
     # breakpoint()
@@ -136,6 +143,7 @@ def main():
         eta_min=1e-5
     )
     loss = torch.nn.MSELoss()
+    loss_mae = torch.nn.L1Loss()
 
     ## Make log file
     model_dir = os.path.join(root, "save_model")
@@ -182,7 +190,8 @@ def main():
                 y_target = batch_graphs.y
                 if y_target.dim() == 3:
                     y_target = batch_graphs.y[:,0, :] # first future step
-                val_loss += loss(y_predict, y_target[:, 3:]).item()
+                # val_loss += loss_mae(y_predict, y_target[:, 3:]).item()
+                val_loss += torch.norm(y_predict - y_target[:, 3:], dim=1).mean().item()
 
         avg_val_loss = val_loss / max(len(valid_loader), 1)
         

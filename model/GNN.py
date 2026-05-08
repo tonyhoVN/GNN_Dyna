@@ -11,9 +11,12 @@ from sklearn.neighbors import KDTree
 from utils.data_loader import GraphData
 import numpy as np
 from model.message_passing_gnn import *
-
-TIME_SERIES = 3
-
+from model.encoder import (
+    TemporalEncoder, 
+    EdgeEncoder,
+    TopologyEdgeEncoder,
+    SurfaceEdgeEncoder
+)
 # =============================================
 # Build radius edges using KDTree (CPU)
 # =============================================
@@ -55,152 +58,8 @@ def build_radius_edges(coords, exclude_edges, radius=0.05):
     return edge_index, edge_attr
 
 # =============================================
-# Merge FEM edges + radius edges
+# GNN models
 # =============================================
-def combine_edges(topo_edge_index, radius_edge_index):
-    """
-    topo_edge_index: (2,E1) on GPU
-    radius_edge_index: (2,E2) on CPU
-    """
-    radius_edge_index = radius_edge_index.to(topo_edge_index.device)
-
-    if radius_edge_index.numel() == 0:
-        return topo_edge_index
-
-    merged = torch.cat([topo_edge_index, radius_edge_index], dim=1)
-    merged = torch.unique(merged, dim=1)
-    return merged
-
-
-class TemporalEncoder1(nn.Module):
-    def __init__(self, in_dim, hidden_dim, n_layers = 3):
-        super().__init__()
-
-        self.lstm = nn.LSTM(
-            input_size=in_dim,
-            hidden_size=hidden_dim,
-            num_layers=n_layers,
-            batch_first=True
-        )
-
-        self.fc = MLP([hidden_dim + 1, hidden_dim, hidden_dim])  # +1 for mass feature
-
-    def forward(self, x, mass):
-        """
-        x: node info (N, F * T)
-        mass: node mass (N,)
-        output: temporal node embedded features (N, H)
-        """
-        # time series node encoder
-        x = x.permute(0, 2, 1).contiguous()   # (N, T, F)
-        out, (h_n, c_n) = self.lstm(x)        # h_n: (n_layers, N, H)
-        h = h_n[-1]                           # (N, H)
-
-        # Add mass as feature
-        h = torch.cat([h, mass.unsqueeze(-1)], dim=-1)  # (N, H+1)
-
-        return self.fc(h)                     # (N, H)
-    
-class TemporalEncoder(nn.Module):
-    def __init__(
-            self, 
-            in_dim, 
-            hidden_dim, 
-            n_layers = 3,
-            layer_norm = False,
-            use_mass = True,
-            use_pos = True,
-            use_boundary = True
-            ):
-        super().__init__()
-
-        lstm_dim = hidden_dim
-        self.lstm = nn.LSTM(
-            input_size=in_dim,
-            hidden_size=lstm_dim,
-            num_layers=n_layers,
-            batch_first=True
-        )
-
-        self.use_mass = use_mass
-        self.use_pos = use_pos
-        self.use_boundary = use_boundary
-        extra_dim = (1 if use_boundary else 0) + (1 if use_mass else 0) + (3 if use_pos else 0)
-
-        self.fc = MLP([lstm_dim + extra_dim, hidden_dim, hidden_dim], layer_norm)  # +1 for mass feature
-                                                                 # +3 for position feature
-    def forward(self, x, mass, pos, boundary):
-        """
-        x: node info (N, F * T)
-        mass: node mass (N,)
-        output: temporal node embedded features (N, H)
-        """
-        # time series node encoder
-        x = x.permute(0, 2, 1).contiguous()   # (N, T, F)
-        out, (h_n, c_n) = self.lstm(x)        # h_n: (n_layers, N, H)
-        h = h_n[-1]                           # (N, H)
-
-        # Add other features
-        extras = []
-        if self.use_mass:
-            extras.append(mass.unsqueeze(-1))
-        if self.use_pos:
-            extras.append(pos)
-        if self.use_boundary:
-            extras.append(boundary.unsqueeze(-1))
-        h = torch.cat([h, *extras], dim=-1)  # (N, H+1+3)
-
-        # h = torch.cat([h, pos, mass.unsqueeze(-1)], dim=-1)  # (N, H+1+3)
-
-        return self.fc(h)                     # (N, H)
-    
-class GRUResidualDecoder(nn.Module):
-    def __init__(self, in_dim, hidden_dim, out_dim=6, n_layers=2):
-        super().__init__()
-        self.gru = nn.GRU(in_dim, hidden_dim, num_layers=n_layers, batch_first=True)
-        self.head = MLP([hidden_dim, hidden_dim, out_dim])
-
-    def forward(self, x_seq, dt=None):
-        # x_seq: (N, F, T)  -> convert to (N, T, F)
-        x_seq = x_seq.permute(0, 2, 1).contiguous()
-        N, T, _ = x_seq.shape
-
-        out, h_n = self.gru(x_seq)       # out: (N, T, H)
-        h_last = out[:, -1, :]            # (N, H)
-        return self.head(h_last)          # (N, 6) residual rates
-
-
-class NormalEncoder(nn.Module):
-    def __init__(self, in_dim, hidden_dim):
-        super().__init__()
-
-        self.fc = MLP([in_dim, hidden_dim, hidden_dim])
-
-    def forward(self, x):
-        """
-        x: node info (N, F)
-        output: node embedded features (N, H)
-        """
-        return self.fc(x)                     # (N, H)
-
-class EdgeEncoder(nn.Module):
-    def __init__(self, 
-                 num_materials: int, 
-                 mat_emb_dim: int, 
-                 numeric_dim: int, 
-                 out_dim: int,
-                 layer_norm = False):
-        super().__init__()
-        self.mat_emb = nn.Embedding(num_materials, mat_emb_dim)
-        self.mlp = MLP([mat_emb_dim + numeric_dim, out_dim, out_dim], layer_norm)
-
-    def forward(self, edge_attr: torch.Tensor) -> torch.Tensor:
-        # edge_attr: (E, 2) -> [material_id, length]
-        mat_id = edge_attr[:, 0].long()
-        numeric = edge_attr[:, 1:]
-        emb = self.mat_emb(mat_id)
-        feat = torch.cat([emb, numeric], dim=-1)
-        return self.mlp(feat)
  
 class MeshGraphNet(nn.Module):
     def __init__(self, node_dim, edge_dim, out_dim, latent_dim=128, n_temp_layers=3, n_gnn_layers=4, num_materials=2, mat_emb_dim=4):
@@ -346,6 +205,7 @@ class EncodeDecodeGNN(nn.Module):
         # Message-passing layers for nodes on surface
         self.layers_surf = GraphNetSurfaceBlock(
             hidden_dim=latent_dim)
+        self.surface_edge_encoder = SurfaceEdgeEncoder(hidden_dim=latent_dim)
 
         self.add_passage = MLP([latent_dim + latent_dim, latent_dim])
 
@@ -372,10 +232,11 @@ class EncodeDecodeGNN(nn.Module):
         edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
 
         # 4. Message passing for surface nodes -> node force
-        h_surf = self.layers_surf(graph.pos, graph.edge_surf_index)
+        surf_edge_feat, edge_surf_index = self.surface_edge_encoder(graph.pos, x_t[:, 3:6], graph.edge_surf_index)
+        h_surf = self.layers_surf(h_topo, edge_surf_index, surf_edge_feat)
 
         surface_mask = torch.zeros(h_surf.size(0), device=h_surf.device, dtype=h_surf.dtype)
-        surface_mask.index_fill_(0, graph.edge_surf_index.view(-1), 1.0)
+        surface_mask.index_fill_(0, edge_surf_index.view(-1), 1.0)
         h_final = h_topo + h_surf * surface_mask.unsqueeze(-1)
 
         # 5. Message passing with neighbor nodes
@@ -401,13 +262,15 @@ class EncodeDecodeGNNGeneral(nn.Module):
                  gnn_topo, 
                  gnn_surface,
                  node_decoder,
-                 msg_passing_steps = 5
+                 msg_passing_steps = 5,
+                 surface_edge_encoder = None
     ):
         super().__init__()
         self.node_encoder = node_encoder
         self.edge_encoder = edge_encorder
         self.layers_topo  = gnn_topo
         self.layers_surf  = gnn_surface
+        self.surface_edge_encoder = surface_edge_encoder
         self.node_decoder = node_decoder
         self.msg_passing_steps = msg_passing_steps
 
@@ -424,13 +287,13 @@ class EncodeDecodeGNNGeneral(nn.Module):
         )    # (N, H)
 
         # 3. Encode edge feature
-        edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+        edge_feat = self.edge_encoder(graph.edge_attr, graph.x_initial, graph.pos, graph.edge_index)  # (E, D)
         # breakpoint()
 
         # 4. Message passing with neighbor nodes for internal force
         # for i in range(self.msg_passing_steps):
         for layer_topo in self.layers_topo:
-            h_topo, edge_feat = layer_topo(h_topo, graph.pos, graph.edge_index, edge_feat) # (N, H)
+            h_topo, edge_feat = layer_topo(h_topo, graph.edge_index, edge_feat) # (N, H)
 
         # 5. Message passing with surface nodes for contact force
         if self.layers_surf is None:
@@ -441,7 +304,12 @@ class EncodeDecodeGNNGeneral(nn.Module):
         #     else:
         #         h_surf = self.layers_surf[0](graph.pos, graph.edge_surf_index)
         else:
-            h_final = self.layers_surf(h_topo, graph.pos, x_t[:,3:6], graph.edge_surf_index) # (N, H)
+            surface_edge_feat, edge_surf_index = self.surface_edge_encoder(
+                graph.pos,
+                x_t[:, 3:6],
+                graph.edge_surf_index,
+            )
+            h_final = self.layers_surf(h_topo, edge_surf_index, surface_edge_feat) # (N, H)
 
         # 6. Combine node features 
         # surface_mask = torch.zeros(h_surf.size(0), device=h_surf.device, dtype=h_surf.dtype)
@@ -471,14 +339,16 @@ class EncodeDecodeGNNIntegration(EncodeDecodeGNNGeneral):
                  gnn_surface,       # GraphNetSurfaceBlock (contact) or None
                  node_decoder,      # outputs (N, 9) increments for [a, v, u]
                  msg_passing_steps=5,
-                 standard_dt = 0.01):
+                 standard_dt = 0.01,
+                 surface_edge_encoder = None):
         super().__init__(
             node_encoder,
             edge_encorder,
             gnn_topo,
             gnn_surface,
             node_decoder,
-            msg_passing_steps
+            msg_passing_steps,
+            surface_edge_encoder=surface_edge_encoder
         )
 
         self.standard_dt = standard_dt
@@ -504,18 +374,23 @@ class EncodeDecodeGNNIntegration(EncodeDecodeGNNGeneral):
         # h0 = h.clone()
 
         # 2) Encode edge features for internal (mesh) edges
-        edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+        edge_feat = self.edge_encoder(graph.edge_attr, graph.x_initial, graph.pos, graph.edge_index)  # (E, D)
 
         # 3) Message passing: interleave INTERNAL + CONTACT steps (more stable for impact)
         L = len(self.layers_topo)
         for k in range(self.msg_passing_steps):
             # --- internal deformation propagation (mesh edges) ---
             topo_layer = self.layers_topo[k % L]
-            h, edge_feat = topo_layer(h, graph.x_initial, graph.pos, graph.edge_index, edge_feat)
+            h, edge_feat = topo_layer(h, graph.edge_index, edge_feat)
 
             # --- contact propagation (surface-to-surface edges) ---
             if self.layers_surf is not None:
-                h = self.layers_surf(h, graph.pos, v_t, graph.edge_surf_index)
+                surface_edge_feat, edge_surf_index = self.surface_edge_encoder(
+                    graph.pos,
+                    v_t,
+                    graph.edge_surf_index,
+                )
+                h = self.layers_surf(h, edge_surf_index, surface_edge_feat)
 
             # freeze SPC node embeddings
             # h = h * (1.0 - bc) + h0 * bc # Not need because no normal->SPC or SPC->SPC
@@ -548,14 +423,16 @@ class EncodeDecodeGNNResidual(EncodeDecodeGNNGeneral):
                  gnn_surface,       # GraphNetSurfaceBlock (contact) or None
                  node_decoder,      # outputs (N, 9) increments for [a, v, u]
                  msg_passing_steps=5,
-                 standard_dt = 0.01):
+                 standard_dt = 0.01,
+                 surface_edge_encoder = None):
         super().__init__(
             node_encoder,
             edge_encorder,
             gnn_topo,
             gnn_surface,
             node_decoder,
-            msg_passing_steps
+            msg_passing_steps,
+            surface_edge_encoder=surface_edge_encoder
         )
 
         self.standard_dt = standard_dt
@@ -581,18 +458,23 @@ class EncodeDecodeGNNResidual(EncodeDecodeGNNGeneral):
         # h0 = h.clone()
 
         # 2) Encode edge features for internal (mesh) edges
-        edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+        edge_feat = self.edge_encoder(graph.edge_attr, graph.x_initial, graph.pos, graph.edge_index)  # (E, D)
 
         # 3) Message passing: interleave INTERNAL + CONTACT steps (more stable for impact)
         L = len(self.layers_topo)
         for k in range(self.msg_passing_steps):
             # --- internal deformation propagation (mesh edges) ---
             topo_layer = self.layers_topo[k % L]
-            h, edge_feat = topo_layer(h, graph.x_initial, graph.pos, graph.edge_index, edge_feat)
+            h, edge_feat = topo_layer(h, graph.edge_index, edge_feat)
 
             # --- contact propagation (surface-to-surface edges) ---
             if self.layers_surf is not None:
-                h = self.layers_surf(h, graph.pos, v_t, graph.edge_surf_index)
+                surface_edge_feat, edge_surf_index = self.surface_edge_encoder(
+                    graph.pos,
+                    v_t,
+                    graph.edge_surf_index,
+                )
+                h = self.layers_surf(h, edge_surf_index, surface_edge_feat)
 
             # freeze SPC node embeddings
             # h = h * (1.0 - bc) + h0 * bc # Not need because no normal->SPC or SPC->SPC
@@ -625,24 +507,28 @@ class EncodeDecodeGNNDirect(EncodeDecodeGNNGeneral):
                  gnn_surface,       # GraphNetSurfaceBlock (contact) or None
                  node_decoder,      # outputs (N, 9) increments for [a, v, u]
                  msg_passing_steps=5,
-                 standard_dt = 0.01):
+                 standard_dt = 0.01,
+                 surface_edge_encoder = None):
         super().__init__(
             node_encoder,
             edge_encorder,
             gnn_topo,
             gnn_surface,
             node_decoder,
-            msg_passing_steps
+            msg_passing_steps,
+            surface_edge_encoder=surface_edge_encoder
         )
 
         self.standard_dt = standard_dt
     
     def forward(self, graph):
         # graph.x: (N, F, T) where last timestep includes [a, v, u] in x_t[0:9]
-        x_t = graph.x[:, :, -1]                # (N, F)
+        # x_t = graph.x[:, :, -1]                # (N, F)
         # a_t = x_t[:, 0:3]                      # (N, 3)
-        v_t = x_t[:, 3:6]                      # (N, 3)
+        # v_t = x_t[:, 3:6]                      # (N, 3)
         # u_t = x_t[:, 6:9]                      # (N, 3)
+
+        # v_t = graph.x[:, 3:6, -1]                      # (N, 3) velocity at last time step
 
         dt = graph.delta_t.unsqueeze(-1)      # (N, 1) or (1,1) broadcastable
 
@@ -657,22 +543,31 @@ class EncodeDecodeGNNDirect(EncodeDecodeGNNGeneral):
         )                                     # (N, H)
         # h0 = h.clone()
 
-        # 2) Encode edge features for internal (mesh) edges
-        edge_feat = self.edge_encoder(graph.edge_attr)  # (E, D)
+        # 2) Encode edge features 
+    
+        # for internal (mesh) edges
+        edge_feat = self.edge_encoder(graph.edge_attr, graph.x_initial, graph.pos, graph.edge_index)  # (E, D)
+
+        # for surface edges
+        surface_edge_feat, edge_surf_index = self.surface_edge_encoder(
+            graph.pos,
+            graph.x[:, 3:6, -1],  # velocity at last time step
+            graph.edge_surf_index,
+        )
 
         # 3) Message passing: interleave INTERNAL + CONTACT steps (more stable for impact)
         L = len(self.layers_topo)
         for k in range(self.msg_passing_steps):
             # --- internal deformation propagation (mesh edges) ---
             topo_layer = self.layers_topo[k % L]
-            h, edge_feat = topo_layer(h, graph.x_initial, graph.pos, graph.edge_index, edge_feat)
-
-            # --- contact propagation (surface-to-surface edges) ---
-            if self.layers_surf is not None:
-                h = self.layers_surf(h, graph.pos, v_t, graph.edge_surf_index)
+            residual_topo = topo_layer(h, graph.edge_index, edge_feat)
 
             # freeze SPC node embeddings
             # h = h * (1.0 - bc) + h0 * bc # Not need because no normal->SPC or SPC->SPC
+        
+            residual_surf = self.layers_surf(h, edge_surf_index, surface_edge_feat)
+
+            h = h + residual_topo + residual_surf
 
         # 5) Decode DIRECT increments (Option A): delta_pred is already the increment for this saved-frame step
         #    Make it robust to dt variability by conditioning the decoder on dt (NOT multiplying by dt).
