@@ -438,49 +438,44 @@ class EncodeDecodeGNNResidual(EncodeDecodeGNNGeneral):
         self.standard_dt = standard_dt
     
     def forward(self, graph):
-        # graph.x: (N, F, T) where last timestep includes [a, v, u] in x_t[0:9]
-        x_t = graph.x[:, :, -1]                # (N, F)
-        a_t = x_t[:, 0:3]                      # (N, 3)
-        v_t = x_t[:, 3:6]                      # (N, 3)
-        u_t = x_t[:, 6:9]                      # (N, 3)
-
         dt = graph.delta_t.unsqueeze(-1)      # (N, 1) or (1,1) broadcastable
 
         bc = graph.boundary_constraint.unsqueeze(-1)
 
         # 1) Encode node features (time series etc.)
         h = self.node_encoder(
-            graph.x,
+            graph.x[:,3:,:],  # only use velocity + displacement time series for encoding
             graph.node_mass,
             graph.x_initial,
             graph.boundary_constraint,
         )                                     # (N, H)
         # h0 = h.clone()
 
-        # 2) Encode edge features for internal (mesh) edges
+        # 2) Encode edge features 
+    
+        # for internal (mesh) edges
         edge_feat = self.edge_encoder(graph.edge_attr, graph.x_initial, graph.pos, graph.edge_index)  # (E, D)
+
+        # for surface edges
+        surface_edge_feat, edge_surf_index = self.surface_edge_encoder(
+            graph.pos,
+            graph.x[:, 3:6, -1],  # velocity at last time step
+            graph.edge_surf_index,
+        )
 
         # 3) Message passing: interleave INTERNAL + CONTACT steps (more stable for impact)
         L = len(self.layers_topo)
         for k in range(self.msg_passing_steps):
             # --- internal deformation propagation (mesh edges) ---
             topo_layer = self.layers_topo[k % L]
-            h, edge_feat = topo_layer(h, graph.edge_index, edge_feat)
-
-            # --- contact propagation (surface-to-surface edges) ---
-            if self.layers_surf is not None:
-                surface_edge_feat, edge_surf_index = self.surface_edge_encoder(
-                    graph.pos,
-                    v_t,
-                    graph.edge_surf_index,
-                )
-                h = self.layers_surf(h, edge_surf_index, surface_edge_feat)
+            residual_topo = topo_layer(h, graph.edge_index, edge_feat)
 
             # freeze SPC node embeddings
             # h = h * (1.0 - bc) + h0 * bc # Not need because no normal->SPC or SPC->SPC
+        
+            residual_surf = self.layers_surf(h, edge_surf_index, surface_edge_feat)
 
-        # 4) Base update (kinematics with constant acceleration) -> [a_t, v_{t+1}^base, u_{t+1}^base]
-        y_base = self.base_update(a_t=a_t, v_t=v_t, u_t=u_t, dt=dt)  # (N, 9)
+            h = h + residual_topo + residual_surf
 
         # 5) Decode DIRECT increments (Option A): delta_pred is already the increment for this saved-frame step
         #    Make it robust to dt variability by conditioning the decoder on dt (NOT multiplying by dt).
@@ -489,13 +484,10 @@ class EncodeDecodeGNNResidual(EncodeDecodeGNNGeneral):
         h = torch.cat([h, dt_feat], dim=-1)  # (N, H+1)
 
         delta_pred = self.node_decoder(h)         # (N, 9) increments for [a, v, u]
-        # enforce BC on updates and output
-        delta_pred = delta_pred * (1.0 - bc) # 
 
-        # 6) Final prediction
-        y_pred = y_base + delta_pred                  # (N, 9)
+        y_pred = graph.x[:, 3:, -1] + delta_pred
         # enforce BC on updates and output
-        y_pred = y_pred * (1 - bc)
+        y_pred = y_pred * (1.0 - bc) # 
 
         return y_pred
 
@@ -582,13 +574,13 @@ class EncodeDecodeGNNDirect(EncodeDecodeGNNGeneral):
         return delta_pred
 
 
-class EncodeDecodeGNNDirectRecurrent(nn.Module):
+class EncodeDecodeGNNRecurrent(nn.Module):
     """
     Recurrent multi-step predictor built from EncodeDecodeGNNDirect-style one-step updates.
     Output is a timeseries of next states [v, u] with shape (N, horizon, 6).
     """
 
-    def __init__(self, one_step_model: EncodeDecodeGNNDirect, pred_horizon: int = 5, hist_len: int = 3):
+    def __init__(self, one_step_model, pred_horizon: int = 5, hist_len: int = 3):
         super().__init__()
         self.one_step_model = one_step_model
         self.pred_horizon = pred_horizon

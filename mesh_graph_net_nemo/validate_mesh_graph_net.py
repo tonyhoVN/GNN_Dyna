@@ -1,0 +1,202 @@
+import argparse
+import json
+import math
+import os
+import random
+from glob import glob
+
+import torch
+from torch.utils.data import ConcatDataset
+from torch_geometric.loader import DataLoader
+
+from train_mesh_graph_net import create_mesh_graph_net
+from utils.data_loader import FEMDataset
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Validate MeshGraphNet with one-step and rollout losses")
+    parser.add_argument("--config", type=str, default="mesh_graph_net.json", help="Path to config JSON")
+    parser.add_argument("--pt-file", type=str, default=None, help="Path to model .pt file for validation")
+    parser.add_argument("--data-dir", type=str, default=None, help="Override data dir")
+    parser.add_argument("--file-glob", type=str, default=None, help="Override file glob")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--start-index", type=int, default=20, help="Start index for rollout in each series")
+    parser.add_argument("--rollout-steps", type=int, default=150, help="Number of rollout steps per series")
+    parser.add_argument("--batch-size", type=int, default=1, help="Validation batch size for one-step loss")
+    return parser.parse_args()
+
+
+def load_raw_config(path: str):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def split_files(npz_files, data_cfg, split_cfg):
+    percent = float(data_cfg.get("percent", 100)) / 100.0
+    k = min(max(1, math.ceil(len(npz_files) * percent)), len(npz_files))
+    npz_files = npz_files[:k]
+
+    train_num = max(1, int(float(split_cfg.get("train", 0.85)) * k))
+    train_num = min(train_num, k)
+    valid_num = int(float(split_cfg.get("valid", 0.15)) * k)
+    valid_files = npz_files[train_num : train_num + valid_num]
+    if not valid_files:
+        valid_files = npz_files[-1:]
+    return valid_files
+
+
+def expand_dt(graph):
+    if hasattr(graph, "delta_t") and graph.delta_t is not None:
+        dt = graph.delta_t
+        if dt.dim() == 0:
+            graph.delta_t = dt.repeat(graph.num_nodes)
+        elif dt.dim() == 1 and dt.numel() == 1:
+            graph.delta_t = dt.repeat(graph.num_nodes)
+        elif hasattr(graph, "batch") and dt.dim() == 1 and dt.numel() != graph.num_nodes:
+            graph.delta_t = dt[graph.batch]
+
+
+def set_rollout_context(graph, x_hist):
+    graph.x = x_hist
+    graph.pos = x_hist[:, 6:9, -1] + graph.x_initial
+    expand_dt(graph)
+
+
+def predict_next_state(model, graph, x_hist):
+    set_rollout_context(graph, x_hist)
+    x_last = x_hist[:, :, -1]
+
+    pred_vu = model(graph)
+    if pred_vu.dim() == 3:
+        pred_vu = pred_vu[:, 0, :]
+
+    next_state = x_last.clone()
+    next_state[:, 3:] = pred_vu
+    return next_state
+
+
+def main():
+    args = parse_args()
+    set_seed(args.seed)
+    raw = load_raw_config(args.config)
+
+    data_cfg = raw.get("data", {})
+    split_cfg = raw.get("split", {"train": 0.85, "valid": 0.15, "test": 0.0})
+    model_cfg = raw.get("model", {})
+    node_cfg = model_cfg.get("node_encoder", {})
+    decoder_cfg = model_cfg.get("decoder", {})
+
+    data_dir = args.data_dir or data_cfg.get("data_dir", "data")
+    file_glob = args.file_glob or data_cfg.get("file_glob", "*.npz")
+    hist_len = int(node_cfg.get("history_len", 5))
+    pred_horizon = int(decoder_cfg.get("pred_horizon", 1))
+
+    root = os.getcwd()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    data_path = os.path.join(root, data_dir)
+    geometry_path = os.path.join(data_path, "geometry_shared.npz")
+
+    npz_files = sorted(glob(os.path.join(data_path, file_glob)))
+    if not npz_files:
+        raise FileNotFoundError(f"No files found in {data_path} with pattern {file_glob}")
+    npz_files = npz_files[-10:]
+    hist_len = 5
+    pred_horizon = 1
+    geometry_path = os.path.join(data_path, "geometry_shared.npz")
+    print(f"Using geometry path: {geometry_path}")
+    datasets = [
+        # Let each NPZ resolve its own geometry_path when present.
+        FEMDataset(path, history_len=hist_len, predict_horizon=pred_horizon, geometry_path=geometry_path)
+        for path in npz_files
+    ]
+    dataset = ConcatDataset(datasets)
+    total_samples = len(dataset)
+    print(f"Total samples: {total_samples}")
+
+    valid_loader = DataLoader(dataset, batch_size=1, shuffle=False)
+
+    model = create_mesh_graph_net(raw).to(device)
+    if args.pt_file is not None:
+        model_path = args.pt_file if os.path.isabs(args.pt_file) else os.path.join(root, args.pt_file)
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        print(f"Loaded model: {model_path}")
+
+    num_params = sum(p.numel() for p in model.parameters())
+    num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model parameters: {num_params} (trainable: {num_trainable})")
+
+    model.eval()
+    mse_loss = torch.nn.MSELoss()
+    mae_loss = torch.nn.L1Loss()
+    one_step_rmse_sum = 0.0
+    one_step_mae_sum = 0.0
+    valid_batches = 0
+
+    with torch.no_grad():
+        for batch_graphs in valid_loader:
+            batch_graphs = batch_graphs.to(device)
+            batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
+
+            pred = model(batch_graphs)
+            target = batch_graphs.y
+            if target.dim() == 3:
+                target = target[:, 0, :]
+            target_vu = target[:, 3:]
+
+            one_step_rmse_sum += torch.norm(pred - target_vu, dim=1).mean().item()
+            # one_step_rmse_sum += mse_loss(pred, target_vu).item()
+            # one_step_mae_sum += mae_loss(pred, target_vu).item()
+            valid_batches += 1
+
+    rollout_series_losses = []
+    for series_idx, series_dataset in enumerate(datasets):
+        max_steps = len(series_dataset) - args.start_index
+        rollout_steps = min(args.rollout_steps, max_steps)
+        if rollout_steps <= 0:
+            print(f"Skip series {series_idx}: insufficient length for start index {args.start_index}")
+            continue
+
+        start_graph = series_dataset[args.start_index].to(device)
+        x_hist = start_graph.x.clone()
+        x_initial = start_graph.x_initial
+        series_rollout_err = 0.0
+
+        with torch.no_grad():
+            for step in range(rollout_steps):
+                idx = args.start_index + step
+                gt_graph = series_dataset[idx]
+                gt_y = gt_graph.y.to(device)
+                if gt_y.dim() == 3:
+                    gt_y = gt_y[:, 0, :]
+
+                graph_in = gt_graph.to(device)
+                next_state = predict_next_state(model, graph_in, x_hist)
+
+                gt_pos = x_initial + gt_y[:, 6:9]
+                pred_pos = x_initial + next_state[:, 6:9]
+                step_err = torch.norm(pred_pos - gt_pos, dim=1).mean()
+                series_rollout_err += step_err.item()
+
+                x_hist = torch.cat([x_hist[:, :, 1:], next_state.unsqueeze(-1)], dim=2)
+
+        rollout_series_losses.append(series_rollout_err / max(1, rollout_steps))
+
+    avg_one_step_mse = one_step_rmse_sum / max(valid_batches, 1)
+    avg_one_step_mae = one_step_mae_sum / max(valid_batches, 1)
+    avg_rollout_loss = sum(rollout_series_losses) / max(len(rollout_series_losses), 1)
+
+    print(f"Val-loss(one-step MSE): {avg_one_step_mse:.6f}")
+    print(f"Val-loss(one-step MAE): {avg_one_step_mae:.6f}")
+    print(f"Val-loss(rollout position MAE): {avg_rollout_loss:.6f}")
+
+
+if __name__ == "__main__":
+    main()

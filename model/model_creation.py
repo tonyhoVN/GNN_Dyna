@@ -3,12 +3,16 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from model.GNN import (
-    TemporalEncoder,
     EncodeDecodeGNNGeneral,
     EncoderDecodeGNNForce,
     EncodeDecodeGNNIntegration,
     EncodeDecodeGNNDirect,
-    EncodeDecodeGNNDirectRecurrent,
+    EncodeDecodeGNNResidual,
+    EncodeDecodeGNNRecurrent,
+)
+
+from model.encoder import (
+    TemporalEncoder,
     EdgeEncoder,
     TopologyEdgeEncoder,
     SurfaceEdgeEncoder,
@@ -30,6 +34,7 @@ from torch import nn
 class ModelConfig:
     type: str
     hidden_dim: int
+    standard_dt: float
     node_encoder: Dict[str, Any]
     edge_encoder: Dict[str, Any]
     gnn_topology: Dict[str, Any]
@@ -47,6 +52,7 @@ class ModelConfig:
         return ModelConfig(
             type=model_cfg.get("type", "general"),
             hidden_dim=int(model_cfg.get("hidden_dim", 64)),
+            standard_dt=float(model_cfg.get("standard_dt", 0.1)),
             node_encoder=model_cfg.get("node_encoder", {}),
             edge_encoder=model_cfg.get("edge_encoder", {}),
             gnn_topology=model_cfg.get("gnn_topology", {}),
@@ -163,7 +169,7 @@ def create_gnn_model(
             layers_surface,
             node_decoder,
             msg_passing_steps=n_topo_layers,
-            standard_dt=0.01,
+            standard_dt=config.standard_dt,
             surface_edge_encoder=surface_edge_encoder
         )
     elif config.type == "direct":
@@ -174,7 +180,7 @@ def create_gnn_model(
             layers_surface,
             node_decoder,
             msg_passing_steps=n_topo_layers,
-            standard_dt=0.01,
+            standard_dt=config.standard_dt,
             surface_edge_encoder=surface_edge_encoder
         )
     elif config.type == "direct_recurrent":
@@ -185,12 +191,30 @@ def create_gnn_model(
             layers_surface,
             node_decoder,
             msg_passing_steps=n_topo_layers,
-            standard_dt=0.01,
+            standard_dt=config.standard_dt,
             surface_edge_encoder=surface_edge_encoder,
         )
         hist_len = int(config.node_encoder.get("history_len", 5))
         pred_horizon = int(config.decoder.get("pred_horizon", 5))
-        return EncodeDecodeGNNDirectRecurrent(
+        return EncodeDecodeGNNRecurrent(
+            one_step_model=one_step_model,
+            pred_horizon=pred_horizon,
+            hist_len=hist_len
+        )
+    elif config.type == "residual_recurrent":
+        one_step_model = EncodeDecodeGNNResidual(
+            node_encoder,
+            edge_encoder,
+            layers_topo,
+            layers_surface,
+            node_decoder,
+            msg_passing_steps=n_topo_layers,
+            standard_dt=config.standard_dt,
+            surface_edge_encoder=surface_edge_encoder,
+        )
+        hist_len = int(config.node_encoder.get("history_len", 5))
+        pred_horizon = int(config.decoder.get("pred_horizon", 5))
+        return EncodeDecodeGNNRecurrent(
             one_step_model=one_step_model,
             pred_horizon=pred_horizon,
             hist_len=hist_len

@@ -10,7 +10,7 @@
     "test": 0.0
   },
   "model": {
-    "type": "direct_recurrent",
+    "type": "residual_recurrent",
     "hidden_dim": 64,
     "standard_dt": 0.1,
     "node_encoder": {
@@ -37,7 +37,7 @@
     },
     "decoder": {
       "out_dim": 6,
-      "pred_horizon": 1
+      "pred_horizon": 5
     }
   },
   "training": {

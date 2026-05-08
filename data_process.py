@@ -17,7 +17,7 @@ def parse_args():
     parser.add_argument(
         "--keyword-file",
         type=str,
-        default="ball_plate.k",
+        default="ball_plate",
         help="Name of .k file"
     )
     parser.set_defaults(skip_time=False)
@@ -269,13 +269,15 @@ def process_gnn_data(data_parent_folder: str, data_folder: str, geometry_path: s
 
 if __name__ == "__main__":
     # Load server
-    root = os.getcwd()
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(current_dir)
     server = dpf.start_local_server(ansys_path=r"C:\Program Files\ANSYS Inc\v242", as_global=True)
+    # server = dpf.start_local_server(ip = "almgr.ece.stonybrook.edu", port = 1055, as_global=True)
     args = parse_args()
     
     # Process all data folders in output/
-    k_file = args.keyword_file
-    output_folder = "output"
+    k_file = args.keyword_file + ".k"
+    output_folder = "output" + os.sep + args.keyword_file
     data_folders = [
         os.path.join(root, output_folder, d)
         for d in os.listdir(os.path.join(root, output_folder))
@@ -283,7 +285,7 @@ if __name__ == "__main__":
     ]
 
     # Save geometry information
-    gnn_data_process_folder = "data"
+    gnn_data_process_folder = "data" + os.sep + args.keyword_file
     geometry_path_abs = os.path.join(root, gnn_data_process_folder, "geometry_shared.npz")
     geometry_path_rel = os.path.join(gnn_data_process_folder, "geometry_shared.npz")
     geometry_data = build_geometry_data(data_folders[0], k_file)

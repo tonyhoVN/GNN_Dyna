@@ -17,7 +17,7 @@ import random
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train GNN from JSON config")
-    parser.add_argument("--config", type=str, default="config/base_line.json", help="Path to config JSON")
+    parser.add_argument("--config", type=str, default="base_line/base_line.json", help="Path to config JSON")
     parser.add_argument("--epochs", type=int, default=None, help="Override epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     parser.add_argument("--learning-rate", type=float, default=None, help="Override learning rate")
@@ -43,7 +43,8 @@ def load_raw_config(path: str):
 
 def main():
     args = parse_args()
-    root = os.getcwd()
+    root = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(root)
     raw = load_raw_config(args.config)
 
     random.seed(args.seed)
@@ -174,6 +175,7 @@ def main():
 
             optimizer.zero_grad()
             batch_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             total_loss += batch_loss.item()
 

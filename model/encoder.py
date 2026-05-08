@@ -1,4 +1,4 @@
-from message_passing_gnn import MLP
+from model.message_passing_gnn import MLP
 import torch.nn as nn
 import torch
 

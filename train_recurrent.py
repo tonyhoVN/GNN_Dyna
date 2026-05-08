@@ -5,6 +5,7 @@ import os
 import random
 from datetime import datetime
 from glob import glob
+import torch.nn.functional as F
 
 import torch
 from torch.utils.data import ConcatDataset, random_split
@@ -41,31 +42,70 @@ def load_raw_config(path: str):
         return json.load(f)
 
 
+# def weighted_sequence_mse(pred_seq, target_seq, percent):
+#     # pred_seq, target_seq: (N, H, C)
+#     horizon = pred_seq.shape[1]
+#     device = pred_seq.device
+#     dtype = pred_seq.dtype
+
+#     t = torch.arange(horizon, device=device, dtype=dtype)
+
+#     alpha_start = 20.0
+#     alpha_end = 2.0
+
+#     if percent < 0.3:
+#         weights = torch.zeros(horizon, device=device, dtype=dtype)
+#         weights[0] = 1.0
+#     else:
+#         if percent < 0.8:
+#             # map percent from [0.5, 0.8] to [0, 1]
+#             p = (percent - 0.3) / 0.5
+#             alpha = alpha_start - (alpha_start - alpha_end) * p
+#         else:
+#             alpha = alpha_end
+
+#         weights = torch.exp(-alpha * (t / horizon))
+
+#     weights = weights / (weights.sum() + 1e-8)
+
+#     per_h = ((pred_seq - target_seq) ** 2).mean(dim=(0, 2))  # (H,)
+#     loss = (per_h * weights).sum()
+
+#     return loss
+
 def weighted_sequence_mse(pred_seq, target_seq, percent):
-    # pred_seq, target_seq: (N, H, C)
+    # (N, H, C)
     horizon = pred_seq.shape[1]
-    
-    # Linear decay weights
-    # weights = torch.arange(horizon, 0, -1, device=pred_seq.device, dtype=pred_seq.dtype)
+    device = pred_seq.device
+    dtype = pred_seq.dtype
 
-    # Eponetial decay weights
-    t = torch.arange(horizon, device=pred_seq.device, dtype=pred_seq.dtype)
-    
-    # tau = 0.4*horizon 
-    # weights = torch.exp(-t / tau)  # Exponential decay
+    t = torch.arange(horizon, device=device, dtype=dtype)
 
-    alpha_start = 20
-    alpha_end = 2
-    if percent < 0.8:
-        alpha = alpha_start - (alpha_start - alpha_end) * (percent / 0.8)
+    alpha_start = 20.0
+    alpha_end = 2.0
+
+    if percent < 0.5:
+        weights = torch.zeros(horizon, device=device, dtype=dtype)
+        weights[0] = 1.0
     else:
-        alpha = alpha_end
-    weights = torch.exp(-alpha * (t / horizon))
-    weights = weights / weights.sum()
-    
-    per_h = ((pred_seq - target_seq) ** 2).mean(dim=(0, 2))  # (H,)
-    return (per_h * weights).sum()
+        if percent < 0.8:
+            p = (percent - 0.5) / 0.3
+            alpha = alpha_start - (alpha_start - alpha_end) * p
+        else:
+            alpha = alpha_end
 
+        weights = torch.exp(-alpha * (t / horizon))
+
+    weights = weights / (weights.sum() + 1e-8)
+
+    # Fast MSE (no reduction)
+    mse = F.mse_loss(pred_seq, target_seq, reduction='none')  # (N, H, C)
+
+    # reduce over batch & channel → (H,)
+    per_h = mse.mean(dim=(0, 2))
+
+    # weighted sum
+    return (per_h * weights).sum()
 
 def main():
     args = parse_args()
@@ -89,7 +129,7 @@ def main():
 
     # Load model config for model creation
     model_cfg = ModelConfig.from_json(args.config)
-    root = os.getcwd()
+    root = os.path.dirname(os.path.abspath(__file__))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -180,7 +220,7 @@ def main():
 
             optimizer.zero_grad()
             batch_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             total_loss += batch_loss.item()
 
@@ -197,7 +237,7 @@ def main():
                 y_target = batch_graphs.y
                 if y_target.dim() == 3:
                     y_target = y_target[:, 0, :]
-                val_loss += one_step_mae(pred_seq[:, 0, :], y_target[:, 3:]).item()
+                val_loss += torch.norm(pred_seq[:, 0, :] - y_target[:, 3:], dim=1).mean().item()
 
         avg_val_loss = val_loss / max(len(valid_loader), 1)
         scheduler.step()

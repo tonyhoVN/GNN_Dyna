@@ -42,7 +42,7 @@ def parse_args():
     parser.add_argument(
         "--keyword-file",
         type=str,
-        default="ball_plate.k",
+        default="ball_plate",
         help="Path to the LS-DYNA keyword file to use as input. If not provided, a default ball_plate.k will be used."
     )
 
@@ -53,7 +53,8 @@ if __name__ == "__main__":
     args = parse_args()
 
     root = os.path.dirname(os.path.abspath(__file__))
-    keyword_path = os.path.join(root, "output", args.keyword_file)
+    key_file = args.keyword_file + ".k"
+    keyword_path = os.path.join(root, "output", args.keyword_file, key_file)
 
     solver = args.solver
     ncpu = args.ncpu
@@ -64,11 +65,18 @@ if __name__ == "__main__":
 
         # Translate model and run simulation
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = os.path.join(root, "output", f"{timestamp}")
+        run_dir = os.path.join(root, "output", args.keyword_file, f"{timestamp}")
         os.makedirs(run_dir, exist_ok=True)
-        modify_keyword_path = os.path.join(run_dir, args.keyword_file)
-        lb = [-200, -400, 0]
-        ub = [200, 0, 0]
+        modify_keyword_path = os.path.join(run_dir, key_file)
+        
+        # Camry hood
+        # lb = [-200, -400, 0]
+        # ub = [200, 0, 0]
+
+        # Front bumper
+        lb = [0, 400, 0]
+        ub = [0, 0, 0]
+
         translate_model(keyword_path=keyword_path, output_path=modify_keyword_path, lb=lb, ub=ub)
 
         # run simulation

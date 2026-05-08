@@ -23,10 +23,10 @@ Generate data manual
 Generate data automate 
 ----------------
 1. Run the solver to obtain data 
-   `python -m create_dataset --num-runs 10 --keyword-file ball_plate.k`
+   `python -m create_dataset --num-runs 10 --keyword-file ball_plate`
 
 2. Post-process and save dataset for training
-   `python -m data_process --keyword-file ball_plate.k`
+   `python -m data_process --keyword-file ball_plate`
 
 
 Training 
