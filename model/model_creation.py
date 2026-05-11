@@ -8,6 +8,7 @@ from model.GNN import (
     EncodeDecodeGNNIntegration,
     EncodeDecodeGNNDirect,
     EncodeDecodeGNNResidual,
+    EncodeDecodeGNNResidualAttention,
     EncodeDecodeGNNRecurrent,
 )
 
@@ -16,6 +17,7 @@ from model.encoder import (
     EdgeEncoder,
     TopologyEdgeEncoder,
     SurfaceEdgeEncoder,
+    SurfaceEdgeAttentionEncoder,
     GRUResidualDecoder,
 )
 
@@ -25,7 +27,8 @@ from model.message_passing_gnn import (
     MLP,
     GraphNetBlock,
     GraphNetSurfaceBlock,
-    GraphNetSurfaceBlockForce
+    GraphNetSurfaceBlockForce,
+    GraphNetContactAttention
 )
 from torch import nn
 
@@ -124,12 +127,20 @@ def create_gnn_model(
 
     # Surface message-passing layer (single block)
     surface_enabled = bool(config.gnn_surface.get("enabled", True))
+    if config.type in {"residual_attention", "residual_attention_recurrent"} and not surface_enabled:
+        raise ValueError("Contact attention models require gnn_surface.enabled=true")
+
     layers_surface: Optional[nn.Module]
     surface_edge_encoder: Optional[nn.Module]
     distance_threshold = float(config.gnn_surface.get("distance_threshold", 20.0))
     if surface_enabled:
         surface_edge_cfg = config.gnn_surface.get("edge_encoder", {})
-        surface_edge_encoder = SurfaceEdgeEncoder(
+        surface_encoder_cls = (
+            SurfaceEdgeAttentionEncoder
+            if config.type in {"residual_attention", "residual_attention_recurrent"}
+            else SurfaceEdgeEncoder
+        )
+        surface_edge_encoder = surface_encoder_cls(
             hidden_dim=hidden_dim,
             threshold=float(surface_edge_cfg.get("distance_threshold", distance_threshold)),
             layer_norm=bool(surface_edge_cfg.get("layer_norm", config.gnn_surface.get("layer_norm", False))),
@@ -183,6 +194,24 @@ def create_gnn_model(
             standard_dt=config.standard_dt,
             surface_edge_encoder=surface_edge_encoder
         )
+    elif config.type == "residual_attention":
+        attention_cfg = config.gnn_surface.get("attention", {})
+        contact_attention = GraphNetContactAttention(
+            hidden_dim=hidden_dim,
+            heads=int(attention_cfg.get("heads", 4)),
+            layer_norm=bool(attention_cfg.get("layer_norm", config.gnn_surface.get("layer_norm", False))),
+        )
+        return EncodeDecodeGNNResidualAttention(
+            node_encoder,
+            edge_encoder,
+            layers_topo,
+            layers_surface,
+            contact_attention,
+            node_decoder,
+            msg_passing_steps=n_topo_layers,
+            standard_dt=config.standard_dt,
+            surface_edge_encoder=surface_edge_encoder,
+        )
     elif config.type == "direct_recurrent":
         one_step_model = EncodeDecodeGNNDirect(
             node_encoder,
@@ -207,6 +236,31 @@ def create_gnn_model(
             edge_encoder,
             layers_topo,
             layers_surface,
+            node_decoder,
+            msg_passing_steps=n_topo_layers,
+            standard_dt=config.standard_dt,
+            surface_edge_encoder=surface_edge_encoder,
+        )
+        hist_len = int(config.node_encoder.get("history_len", 5))
+        pred_horizon = int(config.decoder.get("pred_horizon", 5))
+        return EncodeDecodeGNNRecurrent(
+            one_step_model=one_step_model,
+            pred_horizon=pred_horizon,
+            hist_len=hist_len
+        )
+    elif config.type == "residual_attention_recurrent":
+        attention_cfg = config.gnn_surface.get("attention", {})
+        contact_attention = GraphNetContactAttention(
+            hidden_dim=hidden_dim,
+            heads=int(attention_cfg.get("heads", 4)),
+            layer_norm=bool(attention_cfg.get("layer_norm", config.gnn_surface.get("layer_norm", False))),
+        )
+        one_step_model = EncodeDecodeGNNResidualAttention(
+            node_encoder,
+            edge_encoder,
+            layers_topo,
+            layers_surface,
+            contact_attention,
             node_decoder,
             msg_passing_steps=n_topo_layers,
             standard_dt=config.standard_dt,

@@ -228,3 +228,151 @@ class SurfaceEdgeEncoder(nn.Module):
         ], dim=-1)            # (E_keep, 9)
 
         return self.mlp(edge_surf_feat), edge_surf_index  # return filtered index too
+
+
+class SurfaceEdgeAttentionEncoder(SurfaceEdgeEncoder):
+    """
+    Extends SurfaceEdgeEncoder with a second connectivity output for contact attention.
+
+    SurfaceEdgeEncoder already filters dense surface-to-surface candidate edges by
+    proximity and encodes the true contact edges. This subclass keeps that output
+    and additionally creates edge_attention_index, where each edge means:
+
+        source node = a body node that will query attention
+        target node = an active contact surface node that provides key/value features
+
+    Because the data does not store explicit object IDs, object membership is
+    inferred from connected components of the mesh topology edge_index.
+    """
+
+    def forward(
+        self,
+        pos: torch.Tensor,
+        vel: torch.Tensor,
+        edge_surf_index: torch.Tensor,
+        edge_index: torch.Tensor,
+    ):
+        # First run the normal surface encoder:
+        # - edge_surf_index is all possible surface1 <-> surface2 candidates.
+        # - edge_surf_index_new keeps only candidates whose current distance is
+        #   below the contact threshold.
+        # - surface_edge_feat is the encoded feature for those kept contact edges.
+        surface_edge_feat, edge_surf_index_new = super().forward(pos, vel, edge_surf_index)
+
+        # Build the sparse attention graph from every node in an object body to
+        # contact-active surface nodes on the same object. These edges are used
+        # only by the attention block; they are separate from contact message
+        # passing on edge_surf_index_new.
+        edge_attention_index = self._build_edge_attention_index(
+            num_nodes=pos.size(0),
+            edge_index=edge_index,
+            edge_surf_index_new=edge_surf_index_new,
+            device=pos.device,
+        )
+        return surface_edge_feat, edge_surf_index_new, edge_attention_index
+
+    @staticmethod
+    def _connected_components(num_nodes: int, edge_index: torch.Tensor, device: torch.device) -> torch.Tensor:
+        # Union-find over the mesh topology. Each connected component is treated
+        # as one physical object. This works for batched PyG graphs too because
+        # PyG offsets edge indices per graph, so separate samples remain
+        # disconnected components.
+        parent = list(range(num_nodes))
+
+        def find(node: int) -> int:
+            # Path compression keeps repeated lookups cheap after unions.
+            while parent[node] != node:
+                parent[node] = parent[parent[node]]
+                node = parent[node]
+            return node
+
+        def union(a: int, b: int):
+            root_a = find(a)
+            root_b = find(b)
+            if root_a != root_b:
+                parent[root_b] = root_a
+
+        if edge_index is not None and edge_index.numel() > 0:
+            # Treat topology as undirected for component membership. The stored
+            # graph may be directed for message passing, but connectivity of an
+            # object should not depend on edge direction.
+            for src, dst in edge_index.detach().cpu().t().tolist():
+                union(int(src), int(dst))
+
+        components = [find(i) for i in range(num_nodes)]
+        return torch.tensor(components, dtype=torch.long, device=device)
+
+    @staticmethod
+    def _build_edge_attention_index(
+        num_nodes: int,
+        edge_index: torch.Tensor,
+        edge_surf_index_new: torch.Tensor,
+        device: torch.device,
+    ) -> torch.Tensor:
+        empty = torch.empty((2, 0), dtype=torch.long, device=device)
+
+        # No active contact means no node needs contact-aware attention.
+        if edge_surf_index_new is None or edge_surf_index_new.numel() == 0:
+            return empty
+
+        # A contact surface node is active if it appears in any threshold-kept
+        # contact edge. Both sides of the contact pair are included.
+        active_surface_nodes = torch.unique(edge_surf_index_new.reshape(-1))
+        if active_surface_nodes.numel() == 0:
+            return empty
+
+        components = SurfaceEdgeAttentionEncoder._connected_components(num_nodes, edge_index, device)
+        src_parts = []
+        dst_parts = []
+
+        # Only components that actually contain active contact nodes need
+        # attention edges.
+        active_components = torch.unique(components[active_surface_nodes])
+
+        for comp_id in active_components:
+            # body_nodes: all nodes in one object/component.
+            # surf_nodes: only the contact-active surface nodes in that object.
+            body_nodes = torch.nonzero(components == comp_id, as_tuple=False).view(-1)
+            surf_nodes = active_surface_nodes[components[active_surface_nodes] == comp_id]
+            if body_nodes.numel() == 0 or surf_nodes.numel() == 0:
+                continue
+
+            # Cartesian product:
+            # every body node attends to every active contact surface node from
+            # its own object. Direction is body/query -> surface/key-value.
+            src_parts.append(body_nodes.repeat_interleave(surf_nodes.numel()))
+            dst_parts.append(surf_nodes.repeat(body_nodes.numel()))
+
+        if not src_parts:
+            return empty
+
+        src = torch.cat(src_parts)
+        dst = torch.cat(dst_parts)
+
+        # A node attending to itself adds no new contact information and can
+        # dominate softmax when the node is also an active surface node.
+        not_self = src != dst
+        src = src[not_self]
+        dst = dst[not_self]
+        if src.numel() == 0:
+            return empty
+
+        edge_attention_index = torch.stack([src, dst], dim=0)
+
+        if edge_index is not None and edge_index.numel() > 0:
+            # Do not duplicate existing mesh/topology connections. The topology
+            # graph can be directed and may omit reverse edges into constrained
+            # nodes, so exclude both directions as the same physical connection.
+            candidate_key = edge_attention_index[0] * num_nodes + edge_attention_index[1]
+            topo_src = edge_index[0].to(device)
+            topo_dst = edge_index[1].to(device)
+            topo_key = torch.cat([
+                topo_src * num_nodes + topo_dst,
+                topo_dst * num_nodes + topo_src,
+            ])
+            edge_attention_index = edge_attention_index[:, ~torch.isin(candidate_key, topo_key)]
+
+        if edge_attention_index.numel() == 0:
+            return empty
+
+        return torch.unique(edge_attention_index, dim=1)

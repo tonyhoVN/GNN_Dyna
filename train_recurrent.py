@@ -73,6 +73,21 @@ def load_raw_config(path: str):
 
 #     return loss
 
+def equal_sequence_mse(pred_seq, target_seq, percent):
+    # horizon = pred_seq.shape[1]
+    # device = pred_seq.device
+    # dtype = pred_seq.dtype
+
+    # t = torch.ones(horizon, device=device, dtype=dtype)
+    # weights = t / horizon
+    
+    # Loss 
+    mse = F.mse_loss(pred_seq, target_seq, reduction='none')
+    per_h = mse.mean(dim=(0, 2))
+
+    return per_h.sum()
+
+
 def weighted_sequence_mse(pred_seq, target_seq, percent):
     # (N, H, C)
     horizon = pred_seq.shape[1]
@@ -216,11 +231,12 @@ def main():
             y_target = batch_graphs.y[:, :, 3:]  # (N, H, 6)
 
             percent = epoch / epochs
-            batch_loss = weighted_sequence_mse(pred_seq, y_target, percent=percent)
-
+            # batch_loss = weighted_sequence_mse(pred_seq, y_target, percent=percent)
+            batch_loss = equal_sequence_mse(pred_seq, y_target, percent=percent)
+            
             optimizer.zero_grad()
             batch_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             total_loss += batch_loss.item()
 

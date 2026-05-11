@@ -4,14 +4,16 @@ import math
 import os
 import random
 from glob import glob
-
+import numpy as np
 import torch
 from torch.utils.data import ConcatDataset
 from torch_geometric.loader import DataLoader
 
-from train_mesh_graph_net import create_mesh_graph_net
+from mesh_graph_net_nemo.train_mesh_graph_net import create_mesh_graph_net
 from utils.data_loader import FEMDataset
 
+def mean_std(x):
+    return np.mean(x), np.std(x)
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -134,45 +136,65 @@ def main():
     print(f"Model parameters: {num_params} (trainable: {num_trainable})")
 
     model.eval()
-    mse_loss = torch.nn.MSELoss()
-    mae_loss = torch.nn.L1Loss()
-    one_step_rmse_sum = 0.0
-    one_step_mae_sum = 0.0
-    valid_batches = 0
+    #### One Step prediction ####
+    one_step_vel_list = []
+    one_step_pos_list = []
+    one_step_state_list = []
 
     with torch.no_grad():
         for batch_graphs in valid_loader:
             batch_graphs = batch_graphs.to(device)
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
 
-            pred = model(batch_graphs)
-            target = batch_graphs.y
-            if target.dim() == 3:
-                target = target[:, 0, :]
-            target_vu = target[:, 3:]
+            pred_seq = model(batch_graphs)
+            one_step_pred = pred_seq[:, 0, :] if pred_seq.dim() == 3 else pred_seq
 
-            one_step_rmse_sum += torch.norm(pred - target_vu, dim=1).mean().item()
-            # one_step_rmse_sum += mse_loss(pred, target_vu).item()
-            # one_step_mae_sum += mae_loss(pred, target_vu).item()
-            valid_batches += 1
+            y_target = batch_graphs.y
+            if y_target.dim() == 3:
+                y_target = y_target[:, 0, :]
 
-    rollout_series_losses = []
+            pred_vel = one_step_pred[:, 0:3]
+            pred_pos = one_step_pred[:, 3:6]
+
+            gt_vel = y_target[:, 3:6]
+            gt_pos = y_target[:, 6:9]
+
+            vel_err = torch.norm(pred_vel - gt_vel, dim=1).mean().item()
+            pos_err = torch.norm(pred_pos - gt_pos, dim=1).mean().item()
+
+            pred_state = torch.cat([pred_vel, pred_pos], dim=1)
+            gt_state = torch.cat([gt_vel, gt_pos], dim=1)
+            state_err = torch.norm(pred_state - gt_state, dim=1).mean().item()
+
+            one_step_vel_list.append(vel_err)
+            one_step_pos_list.append(pos_err)
+            one_step_state_list.append(state_err)
+
+    #### Rollout Prediction ####
+    rollout_series_losses_pos = []
+    rollout_series_losses_vel = []
+    rollout_series_losses_state = []
+
     for series_idx, series_dataset in enumerate(datasets):
         max_steps = len(series_dataset) - args.start_index
         rollout_steps = min(args.rollout_steps, max_steps)
+
         if rollout_steps <= 0:
-            print(f"Skip series {series_idx}: insufficient length for start index {args.start_index}")
             continue
 
         start_graph = series_dataset[args.start_index].to(device)
         x_hist = start_graph.x.clone()
         x_initial = start_graph.x_initial
-        series_rollout_err = 0.0
+
+        series_err_pos = 0.0
+        series_err_vel = 0.0
+        series_err_state = 0.0
 
         with torch.no_grad():
             for step in range(rollout_steps):
                 idx = args.start_index + step
                 gt_graph = series_dataset[idx]
+
                 gt_y = gt_graph.y.to(device)
                 if gt_y.dim() == 3:
                     gt_y = gt_y[:, 0, :]
@@ -180,22 +202,48 @@ def main():
                 graph_in = gt_graph.to(device)
                 next_state = predict_next_state(model, graph_in, x_hist)
 
+                # ---- Velocity ----
+                pred_vel = next_state[:, 3:6]
+                gt_vel = gt_y[:, 3:6]
+                vel_err = torch.norm(pred_vel - gt_vel, dim=1).mean()
+
+                # ---- Position ----
                 gt_pos = x_initial + gt_y[:, 6:9]
                 pred_pos = x_initial + next_state[:, 6:9]
-                step_err = torch.norm(pred_pos - gt_pos, dim=1).mean()
-                series_rollout_err += step_err.item()
+                pos_err = torch.norm(pred_pos - gt_pos, dim=1).mean()
+
+                # ---- State ----
+                pred_state = torch.cat([pred_vel, pred_pos], dim=1)
+                gt_state = torch.cat([gt_vel, gt_pos], dim=1)
+                state_err = torch.norm(pred_state - gt_state, dim=1).mean()
+
+                series_err_vel += vel_err.item()
+                series_err_pos += pos_err.item()
+                series_err_state += state_err.item()
 
                 x_hist = torch.cat([x_hist[:, :, 1:], next_state.unsqueeze(-1)], dim=2)
 
-        rollout_series_losses.append(series_rollout_err / max(1, rollout_steps))
+        rollout_series_losses_vel.append(series_err_vel / rollout_steps)
+        rollout_series_losses_pos.append(series_err_pos / rollout_steps)
+        rollout_series_losses_state.append(series_err_state / rollout_steps)
 
-    avg_one_step_mse = one_step_rmse_sum / max(valid_batches, 1)
-    avg_one_step_mae = one_step_mae_sum / max(valid_batches, 1)
-    avg_rollout_loss = sum(rollout_series_losses) / max(len(rollout_series_losses), 1)
+    mean_vel, std_vel = mean_std(one_step_vel_list)
+    mean_pos, std_pos = mean_std(one_step_pos_list)
+    mean_state, std_state = mean_std(one_step_state_list)
 
-    print(f"Val-loss(one-step MSE): {avg_one_step_mse:.6f}")
-    print(f"Val-loss(one-step MAE): {avg_one_step_mae:.6f}")
-    print(f"Val-loss(rollout position MAE): {avg_rollout_loss:.6f}")
+    r_mean_vel, r_std_vel = mean_std(rollout_series_losses_vel)
+    r_mean_pos, r_std_pos = mean_std(rollout_series_losses_pos)
+    r_mean_state, r_std_state = mean_std(rollout_series_losses_state)
+
+    print("One-step:")
+    print(f"  Pos   : {mean_pos:.6f} ± {std_pos:.6f}")
+    print(f"  Vel   : {mean_vel:.6f} ± {std_vel:.6f}")
+    print(f"  State : {mean_state:.6f} ± {std_state:.6f}")
+
+    print("Rollout:")
+    print(f"  Pos   : {r_mean_pos:.6f} ± {r_std_pos:.6f}")
+    print(f"  Vel   : {r_mean_vel:.6f} ± {r_std_vel:.6f}")
+    print(f"  State : {r_mean_state:.6f} ± {r_std_state:.6f}")
 
 
 if __name__ == "__main__":

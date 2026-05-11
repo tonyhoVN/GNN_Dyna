@@ -1,7 +1,7 @@
 {
   "data": {
-    "data_dir": "data",
-    "file_glob": "*data.npz",
+    "data_dir": "data/ball_plate",
+    "file_glob": "*time_data.npz",
     "percent": 50
   },
   "split": {

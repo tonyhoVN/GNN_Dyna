@@ -15,7 +15,8 @@ from model.encoder import (
     TemporalEncoder, 
     EdgeEncoder,
     TopologyEdgeEncoder,
-    SurfaceEdgeEncoder
+    SurfaceEdgeEncoder,
+    SurfaceEdgeAttentionEncoder
 )
 # =============================================
 # Build radius edges using KDTree (CPU)
@@ -488,6 +489,68 @@ class EncodeDecodeGNNResidual(EncodeDecodeGNNGeneral):
         y_pred = graph.x[:, 3:, -1] + delta_pred
         # enforce BC on updates and output
         y_pred = y_pred * (1.0 - bc) # 
+
+        return y_pred
+
+
+class EncodeDecodeGNNResidualAttention(EncodeDecodeGNNResidual):
+    def __init__(self,
+                 node_encoder,
+                 edge_encorder,
+                 gnn_topo,
+                 gnn_surface,
+                 contact_attention,
+                 node_decoder,
+                 msg_passing_steps=5,
+                 standard_dt=0.01,
+                 surface_edge_encoder=None):
+        super().__init__(
+            node_encoder=node_encoder,
+            edge_encorder=edge_encorder,
+            gnn_topo=gnn_topo,
+            gnn_surface=gnn_surface,
+            node_decoder=node_decoder,
+            msg_passing_steps=msg_passing_steps,
+            standard_dt=standard_dt,
+            surface_edge_encoder=surface_edge_encoder,
+        )
+        self.contact_attention = contact_attention
+    
+    def forward(self, graph):
+        dt = graph.delta_t.unsqueeze(-1)
+        bc = graph.boundary_constraint.unsqueeze(-1)
+
+        h = self.node_encoder(
+            graph.x[:,3:,:],
+            graph.node_mass,
+            graph.x_initial,
+            graph.boundary_constraint,
+        )
+
+        edge_feat = self.edge_encoder(graph.edge_attr, graph.x_initial, graph.pos, graph.edge_index)
+
+        surface_edge_feat, edge_surf_index, edge_attention_index = self.surface_edge_encoder(
+            graph.pos,
+            graph.x[:, 3:6, -1],
+            graph.edge_surf_index,
+            graph.edge_index,
+        )
+
+        L = len(self.layers_topo)
+        for k in range(self.msg_passing_steps):
+            topo_layer = self.layers_topo[k % L]
+            residual_topo = topo_layer(h, graph.edge_index, edge_feat)
+            residual_surf = self.layers_surf(h, edge_surf_index, surface_edge_feat)
+            h = h + residual_topo + residual_surf
+
+        h = h + self.contact_attention(h, edge_attention_index)
+
+        dt_feat = dt / self.standard_dt
+        h = torch.cat([h, dt_feat], dim=-1)
+
+        delta_pred = self.node_decoder(h)
+        y_pred = graph.x[:, 3:, -1] + delta_pred
+        y_pred = y_pred * (1.0 - bc)
 
         return y_pred
 

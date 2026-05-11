@@ -1,11 +1,11 @@
 {
   "data": {
-    "data_dir": "data/front_bumper",
+    "data_dir": "data/ball_plate",
     "file_glob": "*time_data.npz",
-    "percent": 100
+    "percent": 50
   },
   "split": {
-    "train": 0.80,
+    "train": 0.85,
     "valid": 0.1,
     "test": 0.0
   },

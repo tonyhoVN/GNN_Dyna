@@ -205,7 +205,7 @@ def main():
         
         # Log loss to file
         with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"{avg_loss}\n")
+            f.write(f"{avg_loss}\t{avg_val_loss}\n")
 
         if (epoch + 1) % save_every == 0:
             torch.save(model.state_dict(), model_path)

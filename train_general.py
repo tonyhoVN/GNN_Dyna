@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from utils.data_loader import FEMDataset
 from model.model_creation import ModelConfig, create_gnn_model
-import wandb
+# import wandb
 import random
 
 
@@ -74,21 +74,21 @@ def main():
 
     #### Start wandb
     run = None
-    if args.log_wandb:
-        run = wandb.init(
-            entity="tonyho-stony-brook-university",
-            project="Physics-informed Graph neural net",
-            config={
-                "learning_rate": learning_rate,
-                "batch_size": batch_size,
-                "hidden_dim": model_cfg.hidden_dim,
-                "architecture": model_cfg.type,
-                "dataset": "LSDyna",
-                "epochs": epochs,
-                "timestamp": timestamp,
-                "config_path": args.config,
-            },
-        )
+    # if args.log_wandb:
+    #     run = wandb.init(
+    #         entity="tonyho-stony-brook-university",
+    #         project="Physics-informed Graph neural net",
+    #         config={
+    #             "learning_rate": learning_rate,
+    #             "batch_size": batch_size,
+    #             "hidden_dim": model_cfg.hidden_dim,
+    #             "architecture": model_cfg.type,
+    #             "dataset": "LSDyna",
+    #             "epochs": epochs,
+    #             "timestamp": timestamp,
+    #             "config_path": args.config,
+    #         },
+    #     )
 
     #### Load dataset
     ##### Load dataset #####

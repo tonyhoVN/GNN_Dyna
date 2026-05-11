@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 from torch_geometric.nn import MessagePassing
+from torch_geometric.utils import softmax
+import math
 
 # =============================================
 # Simple MLP
@@ -281,3 +283,46 @@ class GraphNetSurfaceBlockMHA_Dense(nn.Module):
 
         tmp = torch.cat([out, pos], dim=-1)  # (N, H+3)
         return self.out_net(tmp)             # (N, 3)
+
+
+class GraphNetContactAttention(nn.Module):
+    """
+    Sparse cross-attention where each body node attends to active contact-surface nodes.
+    edge_attention_index[0] is the query/body node and edge_attention_index[1] is the key/value contact node.
+    """
+
+    def __init__(self, hidden_dim: int, heads: int = 4, layer_norm: bool = False):
+        super().__init__()
+        if hidden_dim % heads != 0:
+            raise ValueError(f"hidden_dim ({hidden_dim}) must be divisible by heads ({heads})")
+
+        self.hidden_dim = hidden_dim
+        self.heads = heads
+        self.head_dim = self.hidden_dim // heads
+
+        self.q_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.k_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.v_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.out_net = MLP([hidden_dim * 2, hidden_dim, hidden_dim], layer_norm)
+
+    def forward(self, x: torch.Tensor, edge_attention_index: torch.Tensor) -> torch.Tensor:
+        if edge_attention_index is None or edge_attention_index.numel() == 0:
+            return torch.zeros_like(x)
+
+        query_nodes = edge_attention_index[0]
+        contact_nodes = edge_attention_index[1]
+        num_nodes = x.size(0)
+
+        q = self.q_proj(x).view(num_nodes, self.heads, self.head_dim)
+        k = self.k_proj(x).view(num_nodes, self.heads, self.head_dim)
+        v = self.v_proj(x).view(num_nodes, self.heads, self.head_dim)
+
+        scores = (q[query_nodes] * k[contact_nodes]).sum(dim=-1) / math.sqrt(self.head_dim)
+        alpha = softmax(scores, query_nodes, num_nodes=num_nodes)
+
+        messages = alpha.unsqueeze(-1) * v[contact_nodes]
+        aggregated = x.new_zeros(num_nodes, self.heads, self.head_dim)
+        aggregated.index_add_(0, query_nodes, messages)
+        aggregated = aggregated.reshape(num_nodes, self.hidden_dim)
+
+        return self.out_net(torch.cat([x, aggregated], dim=-1))

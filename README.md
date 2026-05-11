@@ -64,6 +64,12 @@ Notes
 - Update the LS-DYNA solver path if you do not use the default student install.
 
 
+Visualize contact attention
+```
+python visualize_contact_attention.py --data-file data\ball_plate\20260302_133110_time_data.npz --sample-idx 0 --node-id 123
+```
+
+
 ### TODO ###
 - Remesh plate
 - Benchmark baseline GNN with simple edge feature

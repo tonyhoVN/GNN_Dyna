@@ -4,7 +4,7 @@ import os
 import random
 import time
 from glob import glob
-
+import numpy as np
 import torch
 from torch.utils.data import ConcatDataset
 from torch_geometric.loader import DataLoader
@@ -18,6 +18,10 @@ random.seed(seed)
 torch.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 
+
+
+def mean_std(x):
+    return np.mean(x), np.std(x)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Validate recurrent GNN with one-step and rollout losses")
@@ -119,66 +123,114 @@ def main():
 
     model.eval()
 
-    one_step_loss_sum = 0.0
-    valid_items = 0
+    #### One Step prediction ####
+    one_step_vel_list = []
+    one_step_pos_list = []
+    one_step_state_list = []
 
     with torch.no_grad():
         for batch_graphs in valid_loader:
             batch_graphs = batch_graphs.to(device)
             batch_graphs.delta_t = batch_graphs.delta_t[batch_graphs.batch]
+
             pred_seq = model(batch_graphs)
+            one_step_pred = pred_seq[:, 0, :] if pred_seq.dim() == 3 else pred_seq
+
             y_target = batch_graphs.y
             if y_target.dim() == 3:
                 y_target = y_target[:, 0, :]
 
-            one_step_pred = pred_seq[:, 0, :] if pred_seq.dim() == 3 else pred_seq
-            one_step_loss_sum += torch.norm(one_step_pred - y_target[:, 3:], dim=1).mean().item()
-            valid_items += 1
+            pred_vel = one_step_pred[:, 0:3]
+            pred_pos = one_step_pred[:, 3:6]
 
-    # breakpoint()
-    rollout_series_losses = []
+            gt_vel = y_target[:, 3:6]
+            gt_pos = y_target[:, 6:9]
+
+            vel_err = torch.norm(pred_vel - gt_vel, dim=1).mean().item()
+            pos_err = torch.norm(pred_pos - gt_pos, dim=1).mean().item()
+
+            pred_state = torch.cat([pred_vel, pred_pos], dim=1)
+            gt_state = torch.cat([gt_vel, gt_pos], dim=1)
+            state_err = torch.norm(pred_state - gt_state, dim=1).mean().item()
+
+            one_step_vel_list.append(vel_err)
+            one_step_pos_list.append(pos_err)
+            one_step_state_list.append(state_err)
+
+    #### Rollout Prediction ####
+    rollout_series_losses_pos = []
+    rollout_series_losses_vel = []
+    rollout_series_losses_state = []
+
     for series_idx, series_dataset in enumerate(datasets):
         max_steps = len(series_dataset) - args.start_index
         rollout_steps = min(args.rollout_steps, max_steps)
+
         if rollout_steps <= 0:
-            print(f"Skip series {series_idx}: insufficient length for start index {args.start_index}")
             continue
 
         start_graph = series_dataset[args.start_index].to(device)
         x_hist = start_graph.x.clone()
         x_initial = start_graph.x_initial
-        series_rollout_err = 0.0
+
+        series_err_pos = 0.0
+        series_err_vel = 0.0
+        series_err_state = 0.0
 
         with torch.no_grad():
             for step in range(rollout_steps):
                 idx = args.start_index + step
                 gt_graph = series_dataset[idx]
+
                 gt_y = gt_graph.y.to(device)
                 if gt_y.dim() == 3:
                     gt_y = gt_y[:, 0, :]
 
                 graph_in = gt_graph.to(device)
                 next_state = predict_next_state(model, graph_in, x_hist)
-                # breakpoint()
+
+                # ---- Velocity ----
+                pred_vel = next_state[:, 3:6]
+                gt_vel = gt_y[:, 3:6]
+                vel_err = torch.norm(pred_vel - gt_vel, dim=1).mean()
+
+                # ---- Position ----
                 gt_pos = x_initial + gt_y[:, 6:9]
                 pred_pos = x_initial + next_state[:, 6:9]
-                step_err = torch.norm(pred_pos - gt_pos, dim=1).mean()
-                # step_err = mae_loss(pred_pos, gt_pos)
-                series_rollout_err += step_err.item()
+                pos_err = torch.norm(pred_pos - gt_pos, dim=1).mean()
+
+                # ---- State ----
+                pred_state = torch.cat([pred_vel, pred_pos], dim=1)
+                gt_state = torch.cat([gt_vel, gt_pos], dim=1)
+                state_err = torch.norm(pred_state - gt_state, dim=1).mean()
+
+                series_err_vel += vel_err.item()
+                series_err_pos += pos_err.item()
+                series_err_state += state_err.item()
 
                 x_hist = torch.cat([x_hist[:, :, 1:], next_state.unsqueeze(-1)], dim=2)
 
-        rollout_series_losses.append(series_rollout_err / max(1, rollout_steps))
-        # print(
-        #     f"Series {series_idx}: rollout position MAE = {rollout_series_losses[-1]:.6f} "
-        #     f"over {rollout_steps} steps"
-        # )
+        rollout_series_losses_vel.append(series_err_vel / rollout_steps)
+        rollout_series_losses_pos.append(series_err_pos / rollout_steps)
+        rollout_series_losses_state.append(series_err_state / rollout_steps)
 
-    avg_one_step_loss = one_step_loss_sum / max(valid_items, 1)
-    avg_rollout_loss = sum(rollout_series_losses) / max(len(rollout_series_losses), 1)
+    mean_vel, std_vel = mean_std(one_step_vel_list)
+    mean_pos, std_pos = mean_std(one_step_pos_list)
+    mean_state, std_state = mean_std(one_step_state_list)
 
-    print(f"RMSE Val-loss(one-step): {avg_one_step_loss:.6f}")
-    print(f"RMSE Val-loss(rollout): {avg_rollout_loss:.6f}")
+    r_mean_vel, r_std_vel = mean_std(rollout_series_losses_vel)
+    r_mean_pos, r_std_pos = mean_std(rollout_series_losses_pos)
+    r_mean_state, r_std_state = mean_std(rollout_series_losses_state)
+
+    print("One-step:")
+    print(f"  Pos   : {mean_pos:.6f} ± {std_pos:.6f}")
+    print(f"  Vel   : {mean_vel:.6f} ± {std_vel:.6f}")
+    print(f"  State : {mean_state:.6f} ± {std_state:.6f}")
+
+    print("Rollout:")
+    print(f"  Pos   : {r_mean_pos:.6f} ± {r_std_pos:.6f}")
+    print(f"  Vel   : {r_mean_vel:.6f} ± {r_std_vel:.6f}")
+    print(f"  State : {r_mean_state:.6f} ± {r_std_state:.6f}")
 
 
 if __name__ == "__main__":
